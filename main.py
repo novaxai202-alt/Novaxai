@@ -394,6 +394,7 @@ def is_time_date_query(message: str) -> bool:
     time_date_patterns = [
         'what time is it', 'current time', 'what\'s the time', 'time now', 'time right now',
         'what date is it', 'current date', 'what\'s the date', 'today\'s date', 'date today', 'todays date',
+        'what is today date', 'what is todays date', 'what is the date today',
         'what day is it', 'what\'s today', 'today is', 'current day',
         'what year is it', 'current year', 'what month', 'current month', 'what minute',
         'what hour', 'current hour', 'current minute', 'time zone', 'timezone'
@@ -1354,14 +1355,17 @@ async def chat_stream(request: ChatRequest):
             elif 'continue' in request.message.lower():
                 context_instruction = "\n\nIMPORTANT: User wants to continue from previous conversation. Reference the recent chat context and continue the discussion.\n"
             
-            # Force datetime context for time/date queries even if not added above
-            if is_time_date_query(request.message) and not datetime_context:
+            # Force datetime context for time/date queries - ALWAYS provide real datetime
+            if is_time_date_query(request.message):
                 datetime_info = get_current_datetime_info()
-                datetime_context = f"\n\nCURRENT REAL-TIME INFORMATION (MANDATORY TO USE):\n"
-                datetime_context += f"📅 TODAY'S DATE: {datetime_info['current_date']}\n"
-                datetime_context += f"🕐 CURRENT UTC TIME: {datetime_info['current_time_utc']}\n"
-                datetime_context += f"📆 YEAR: {datetime_info['year']}\n"
-                datetime_context += f"\n⚠️ CRITICAL: Always use the above current date/time information. Do NOT reference any other dates.\n"
+                datetime_context = f"\n\n=== MANDATORY REAL-TIME INFORMATION ===\n"
+                datetime_context += f"📅 TODAY'S ACTUAL DATE: {datetime_info['current_date']}\n"
+                datetime_context += f"🕐 CURRENT ACTUAL UTC TIME: {datetime_info['current_time_utc']}\n"
+                datetime_context += f"📆 CURRENT ACTUAL YEAR: {datetime_info['year']}\n"
+                datetime_context += f"📅 DAY OF WEEK: {datetime_info['day_of_week']}\n"
+                datetime_context += f"📅 MONTH: {datetime_info['month']}\n"
+                datetime_context += f"\n🚨 CRITICAL INSTRUCTION: You MUST use ONLY the above real date/time information. Do NOT generate any other dates. The user is asking for the ACTUAL current date/time, so respond with the EXACT information provided above.\n"
+                datetime_context += f"=== END MANDATORY INFORMATION ===\n"
                 context_str = f"Real-time Context:{datetime_context}\n\n{context_str}" if context_str else f"Real-time Context:{datetime_context}"
             
             if complexity_analysis['complexity'] == 'simple':
@@ -1758,14 +1762,17 @@ async def chat(request: ChatRequest):
         elif 'continue' in request.message.lower():
             context_instruction = "\n\nIMPORTANT: User wants to continue from previous conversation. Reference the recent chat context and continue the discussion.\n"
         
-        # Force datetime context for time/date queries even if not added above
-        if is_time_date_query(request.message) and not datetime_context:
+        # Force datetime context for time/date queries - ALWAYS provide real datetime
+        if is_time_date_query(request.message):
             datetime_info = get_current_datetime_info()
-            datetime_context = f"\n\nCURRENT REAL-TIME INFORMATION (MANDATORY TO USE):\n"
-            datetime_context += f"📅 TODAY'S DATE: {datetime_info['current_date']}\n"
-            datetime_context += f"🕐 CURRENT UTC TIME: {datetime_info['current_time_utc']}\n"
-            datetime_context += f"📆 YEAR: {datetime_info['year']}\n"
-            datetime_context += f"\n⚠️ CRITICAL: Always use the above current date/time information. Do NOT reference any other dates.\n"
+            datetime_context = f"\n\n=== MANDATORY REAL-TIME INFORMATION ===\n"
+            datetime_context += f"📅 TODAY'S ACTUAL DATE: {datetime_info['current_date']}\n"
+            datetime_context += f"🕐 CURRENT ACTUAL UTC TIME: {datetime_info['current_time_utc']}\n"
+            datetime_context += f"📆 CURRENT ACTUAL YEAR: {datetime_info['year']}\n"
+            datetime_context += f"📅 DAY OF WEEK: {datetime_info['day_of_week']}\n"
+            datetime_context += f"📅 MONTH: {datetime_info['month']}\n"
+            datetime_context += f"\n🚨 CRITICAL INSTRUCTION: You MUST use ONLY the above real date/time information. Do NOT generate any other dates. The user is asking for the ACTUAL current date/time, so respond with the EXACT information provided above.\n"
+            datetime_context += f"=== END MANDATORY INFORMATION ===\n"
             context_str = f"Real-time Context:{datetime_context}\n\n{context_str}" if context_str else f"Real-time Context:{datetime_context}"
         
         if complexity_analysis['complexity'] == 'simple':
