@@ -435,7 +435,7 @@ def is_image_generation_query(message: str) -> bool:
 def is_ceo_founder_query(message: str) -> bool:
     """Check if user is asking about CEO or founder"""
     message_lower = message.lower()
-    ceo_keywords = ['ceo', 'founder', 'created you', 'made you', 'who created', 'who made', 'rishav', 'rishav jha', 'creator']
+    ceo_keywords = ['ceo', 'founder', 'created you', 'made you', 'who created', 'who made', 'rishav', 'rishav jha', 'creator', 'novacloud', 'nova cloud']
     return any(keyword in message_lower for keyword in ceo_keywords)
 
 def detect_user_intent(message: str) -> str:
@@ -1242,6 +1242,22 @@ async def chat_stream(request: ChatRequest):
             # Check if this is a simple greeting
             is_greeting = complexity_analysis['complexity'] == 'simple'
             
+            # DIRECT DATE/TIME RESPONSE - bypass AI for accuracy
+            if is_time_date_query(request.message):
+                datetime_info = get_current_datetime_info()
+                ist_time = datetime_info['timezones']['IST']
+                direct_response = f"⚡ Here's today's date and time:\n\n📅 Current Date Today's date is {datetime_info['current_date']}.\n🕐 Indian Time {ist_time}\n🌍 UTC Time {datetime_info['current_time_utc']}\n\nNeed any other information about this date?"
+                
+                # Send direct response
+                yield f"data: {json.dumps({'type': 'response_start'})}\n\n"
+                yield f"data: {json.dumps({'type': 'response_chunk', 'content': direct_response})}\n\n"
+                yield f"data: {json.dumps({'type': 'response_end', 'suggestions': ['Check different time zones?', 'Need the current time too?']})}\n\n"
+                
+                # Save and return
+                await database.save_message(user_id, chat_id, request.message, direct_response, 'NovaX Assistant')
+                await database.update_chat_title_if_new(chat_id, request.message)
+                return
+            
             # Handle image generation, real-time queries and time/date requests
             generated_image = None
             search_context = ""
@@ -1707,6 +1723,23 @@ async def chat(request: ChatRequest):
         
         # Check if this is a simple greeting
         is_greeting = complexity_analysis['complexity'] == 'simple'
+        
+        # DIRECT DATE/TIME RESPONSE - bypass AI for accuracy
+        if is_time_date_query(request.message):
+            datetime_info = get_current_datetime_info()
+            ist_time = datetime_info['timezones']['IST']
+            direct_response = f"⚡ Here's today's date and time:\n\n📅 Current Date Today's date is {datetime_info['current_date']}.\n🕐 Indian Time {ist_time}\n🌍 UTC Time {datetime_info['current_time_utc']}\n\nNeed any other information about this date?"
+            
+            # Save and return immediately
+            await database.save_message(user_id, chat_id, request.message, direct_response, 'NovaX Assistant')
+            await database.update_chat_title_if_new(chat_id, request.message)
+            
+            return ChatResponse(
+                response=direct_response,
+                agent_type='NovaX Assistant',
+                suggestions=["Check different time zones?", "Need the current time too?"],
+                chat_id=chat_id
+            )
         
         # Handle image generation, real-time queries and time/date requests
         generated_image = None
