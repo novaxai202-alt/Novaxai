@@ -10,6 +10,8 @@ from search_service import novax_search
 from image_service import image_generator
 from gemini_pool import initialize_gemini_pool, get_gemini_pool
 from pool_status import router as pool_router
+from parallel_utils import FastParallelProcessor, optimize_for_render
+from fast_cache import response_cache, search_cache, get_cached_response, cache_ai_response, get_cached_search, cache_search_results
 import os
 import re
 import uuid
@@ -19,6 +21,8 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 import pytz
 from typing import List
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 load_dotenv()
 
@@ -98,6 +102,17 @@ else:
     print(f"🚀 Initializing Gemini pool with {len(api_keys)} API keys for parallel processing")
     initialize_gemini_pool(api_keys)
     use_pool = True
+
+# Enterprise-scale configuration for 2000+ concurrent users
+render_config = {
+    'max_workers': 50,
+    'semaphore_limit': 2000,
+    'batch_size': 25,
+    'timeout': 120
+}
+executor = ThreadPoolExecutor(max_workers=render_config['max_workers'])
+request_semaphore = asyncio.Semaphore(render_config['semaphore_limit'])
+fast_processor = FastParallelProcessor(max_workers=render_config['max_workers'])
 
 # Real-time information functions
 def get_current_datetime_info() -> dict:
@@ -416,9 +431,19 @@ def is_image_generation_query(message: str) -> bool:
     
     return any(keyword in message_lower for keyword in image_keywords)
 
+def is_ceo_founder_query(message: str) -> bool:
+    """Check if user is asking about CEO or founder"""
+    message_lower = message.lower()
+    ceo_keywords = ['ceo', 'founder', 'created you', 'made you', 'who created', 'who made', 'rishav', 'rishav jha', 'creator']
+    return any(keyword in message_lower for keyword in ceo_keywords)
+
 def detect_user_intent(message: str) -> str:
     """Detect what type of NovaX AI agent should respond"""
     message_lower = message.lower()
+    
+    # Check for CEO/founder queries first
+    if is_ceo_founder_query(message):
+        return 'NovaX Assistant'
     
     # Check for image generation first
     if is_image_generation_query(message):
@@ -1444,19 +1469,21 @@ NovaX AI:"""
                     print(f"Vision model error: {vision_error}")
                     response = model.generate_content(full_prompt + "\n\nNote: Image analysis unavailable, but I can help with your request.", stream=True)
             else:
-                # Use pool for parallel processing if available
-                if use_pool:
-                    try:
-                        pool = get_gemini_pool()
-                        response = await pool.generate_content_stream_with_retry(full_prompt)
-                    except Exception as pool_error:
-                        print(f"Pool error, falling back to single model: {pool_error}")
-                        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                        response = model.generate_content(full_prompt, stream=True)
-                else:
-                    model = genai.GenerativeModel('gemini-2.5-flash')
-                    response = model.generate_content(full_prompt, stream=True)
+                # Fast parallel streaming with semaphore control
+                async with request_semaphore:
+                    if use_pool:
+                        try:
+                            pool = get_gemini_pool()
+                            response = await pool.generate_content_stream_with_retry(full_prompt)
+                        except Exception as pool_error:
+                            print(f"Pool error, falling back: {pool_error}")
+                            response = await asyncio.get_event_loop().run_in_executor(
+                                executor, lambda: genai.GenerativeModel('gemini-2.5-flash').generate_content(full_prompt, stream=True)
+                            )
+                    else:
+                        response = await asyncio.get_event_loop().run_in_executor(
+                            executor, lambda: genai.GenerativeModel('gemini-2.5-flash').generate_content(full_prompt, stream=True)
+                        )
             
             yield f"data: {json.dumps({'type': 'response_start'})}\n\n"
             
@@ -1666,11 +1693,22 @@ async def chat(request: ChatRequest):
         
         # Only perform web search for Explorer agent (not for direct time/date queries)
         if agent_type == 'NovaX Explorer' and not is_greeting and not is_time_date_query(request.message):
-            # Perform web search for additional context
-            search_results = await novax_search.search(request.message, 5)
-            if search_results["results"]:
-                search_context = novax_search.format_search_context(search_results, request.message)
-                citations = novax_search.generate_citations(search_results)
+            # Check cache first
+            cached_search = await get_cached_search(request.message)
+            if cached_search:
+                search_context = cached_search.get('context', '')
+                citations = cached_search.get('citations', [])
+            else:
+                # Perform web search for additional context
+                search_results = await novax_search.search(request.message, 5)
+                if search_results["results"]:
+                    search_context = novax_search.format_search_context(search_results, request.message)
+                    citations = novax_search.generate_citations(search_results)
+                    # Cache results
+                    await cache_search_results(request.message, {
+                        'context': search_context,
+                        'citations': citations
+                    })
         
         # Get user memory for persistent context
         user_memory_context = await database.get_user_context_for_ai(user_id)
@@ -1682,12 +1720,24 @@ async def chat(request: ChatRequest):
         if user_memory_context:
             personalized_prompt += user_memory_context
         
+        # Add CEO/founder context if relevant
+        ceo_context = ""
+        if is_ceo_founder_query(request.message):
+            ceo_context = f"\n\nCEO/FOUNDER INFORMATION:\n"
+            ceo_context += f"🏢 CEO & Founder: Rishav Kumar Jha\n"
+            ceo_context += f"🚀 Company: NovaX Technologies\n"
+            ceo_context += f"💡 Creator of NovaX AI Platform\n"
+            ceo_context += f"☁️ Also created NovaCloud: [NovaCloud Platform](https://novacloud22.web.app)\n"
+            ceo_context += f"🌟 Visionary entrepreneur building next-generation AI solutions\n"
+        
         # Generate prompt based on complexity analysis and topic relevance
         context_parts = []
         if datetime_context:
             context_parts.append(f"Real-time Context:{datetime_context}")
         if search_context:
             context_parts.append(f"Search Context:\n{search_context}")
+        if ceo_context:
+            context_parts.append(f"CEO Context:{ceo_context}")
         
         # Add chat context if topic is related OR if user asks to continue
         if (topic_analysis['context_needed'] or 'continue' in request.message.lower()) and chat_history:
@@ -1817,29 +1867,54 @@ NovaX AI:"""
                 print(f"Vision model error: {vision_error}")
                 response = model.generate_content(full_prompt + "\n\nNote: Image analysis unavailable, but I can help with your request.")
         else:
-            # Use pool for parallel processing if available
-            if use_pool:
-                try:
-                    pool = get_gemini_pool()
-                    response_text = await pool.generate_content_with_retry(full_prompt)
-                    # Create a mock response object for compatibility
-                    class MockResponse:
-                        def __init__(self, text):
-                            self.text = text
-                    response = MockResponse(response_text)
-                except Exception as pool_error:
-                    print(f"Pool error, falling back to single model: {pool_error}")
-                    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-                    model = genai.GenerativeModel('gemini-2.5-flash')
-                    response = model.generate_content(full_prompt)
+            # Check cache first for faster responses
+            cached_response = await get_cached_response(full_prompt)
+            if cached_response and not generated_image:
+                class MockResponse:
+                    def __init__(self, text):
+                        self.text = text
+                response = MockResponse(cached_response)
             else:
-                model = genai.GenerativeModel('gemini-2.5-flash')
-                response = model.generate_content(full_prompt)
+                # Fast parallel processing with semaphore control
+                async with request_semaphore:
+                    if use_pool:
+                        try:
+                            pool = get_gemini_pool()
+                            response_text = await pool.generate_content_with_retry(full_prompt)
+                            class MockResponse:
+                                def __init__(self, text):
+                                    self.text = text
+                            response = MockResponse(response_text)
+                        except Exception as pool_error:
+                            print(f"Pool error, falling back: {pool_error}")
+                            response = await asyncio.get_event_loop().run_in_executor(
+                                executor, lambda: genai.GenerativeModel('gemini-2.5-flash').generate_content(full_prompt)
+                            )
+                    else:
+                        response = await asyncio.get_event_loop().run_in_executor(
+                            executor, lambda: genai.GenerativeModel('gemini-2.5-flash').generate_content(full_prompt)
+                        )
+                
+                # Cache the response for future use
+                if response.text and not generated_image:
+                    await cache_ai_response(full_prompt, response.text)
         
         # Filter response to ensure brand safety and decode HTML entities
         import html
         filtered_response = filter_brand_unsafe_content(response.text)
         filtered_response = html.unescape(filtered_response)
+        
+        # Convert all URLs to clickable markdown links
+        import re
+        url_pattern = r'https?://[^\s]+'
+        urls = re.findall(url_pattern, filtered_response)
+        for url in urls:
+            if not f']({url})' in filtered_response:  # Avoid double conversion
+                # Extract domain for link text
+                domain = re.search(r'https?://([^/]+)', url)
+                if domain:
+                    link_text = domain.group(1).replace('www.', '')
+                    filtered_response = filtered_response.replace(url, f'[{link_text}]({url})')
         
         # Apply NovaX formatting if not already formatted
         filtered_response = format_novax_response(filtered_response, complexity_analysis, agent_type)
