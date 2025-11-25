@@ -378,8 +378,10 @@ def is_time_date_query(message: str) -> bool:
     # Direct time/date queries
     time_date_patterns = [
         'what time is it', 'current time', 'what\'s the time', 'time now', 'time right now',
-        'what date is it', 'current date', 'what\'s the date', 'today\'s date', 'date today',
-        'what day is it', 'what\'s today', 'today is', 'current day'
+        'what date is it', 'current date', 'what\'s the date', 'today\'s date', 'date today', 'todays date',
+        'what day is it', 'what\'s today', 'today is', 'current day',
+        'what year is it', 'current year', 'what month', 'current month', 'what minute',
+        'what hour', 'current hour', 'current minute', 'time zone', 'timezone'
     ]
     
     # Check for exact patterns
@@ -387,11 +389,11 @@ def is_time_date_query(message: str) -> bool:
         return True
     
     # Check for simple time/date words with question structure
-    simple_time_words = ['time', 'date', 'day']
-    question_words = ['what', 'current', 'now', 'today']
+    simple_time_words = ['time', 'date', 'day', 'year', 'month', 'hour', 'minute', 'second']
+    question_words = ['what', 'current', 'now', 'today', 'todays']
     
     words = message_lower.split()
-    if len(words) <= 6:  # Short queries only
+    if len(words) <= 8:  # Extended for more time queries
         has_time_word = any(word in words for word in simple_time_words)
         has_question_word = any(word in words for word in question_words)
         if has_time_word and has_question_word:
