@@ -1327,6 +1327,16 @@ async def chat_stream(request: ChatRequest):
             elif 'continue' in request.message.lower():
                 context_instruction = "\n\nIMPORTANT: User wants to continue from previous conversation. Reference the recent chat context and continue the discussion.\n"
             
+            # Force datetime context for time/date queries even if not added above
+            if is_time_date_query(request.message) and not datetime_context:
+                datetime_info = get_current_datetime_info()
+                datetime_context = f"\n\nCURRENT REAL-TIME INFORMATION (MANDATORY TO USE):\n"
+                datetime_context += f"📅 TODAY'S DATE: {datetime_info['current_date']}\n"
+                datetime_context += f"🕐 CURRENT UTC TIME: {datetime_info['current_time_utc']}\n"
+                datetime_context += f"📆 YEAR: {datetime_info['year']}\n"
+                datetime_context += f"\n⚠️ CRITICAL: Always use the above current date/time information. Do NOT reference any other dates.\n"
+                context_str = f"Real-time Context:{datetime_context}\n\n{context_str}" if context_str else f"Real-time Context:{datetime_context}"
+            
             if complexity_analysis['complexity'] == 'simple':
                 # Simple responses with NovaX style
                 full_prompt = f"""{personalized_prompt}
@@ -1695,6 +1705,16 @@ async def chat(request: ChatRequest):
             context_instruction = "\n\nIMPORTANT: This is a new topic unrelated to previous conversation. Respond fresh without referencing previous messages.\n"
         elif 'continue' in request.message.lower():
             context_instruction = "\n\nIMPORTANT: User wants to continue from previous conversation. Reference the recent chat context and continue the discussion.\n"
+        
+        # Force datetime context for time/date queries even if not added above
+        if is_time_date_query(request.message) and not datetime_context:
+            datetime_info = get_current_datetime_info()
+            datetime_context = f"\n\nCURRENT REAL-TIME INFORMATION (MANDATORY TO USE):\n"
+            datetime_context += f"📅 TODAY'S DATE: {datetime_info['current_date']}\n"
+            datetime_context += f"🕐 CURRENT UTC TIME: {datetime_info['current_time_utc']}\n"
+            datetime_context += f"📆 YEAR: {datetime_info['year']}\n"
+            datetime_context += f"\n⚠️ CRITICAL: Always use the above current date/time information. Do NOT reference any other dates.\n"
+            context_str = f"Real-time Context:{datetime_context}\n\n{context_str}" if context_str else f"Real-time Context:{datetime_context}"
         
         if complexity_analysis['complexity'] == 'simple':
             # Simple responses with NovaX style
