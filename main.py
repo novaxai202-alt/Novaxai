@@ -40,10 +40,26 @@ app.add_middleware(
 firebase_initialized = False
 try:
     if not firebase_admin._apps:
-        cred = credentials.Certificate(os.getenv("FIREBASE_SERVICE_ACCOUNT"))
-        firebase_admin.initialize_app(cred)
-    firebase_initialized = True
-    print("Firebase initialized successfully")
+        service_account = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+        if service_account:
+            # Check if it's a file path or JSON content
+            if service_account.startswith('{'):
+                # Direct JSON content (Render environment)
+                import json
+                service_account_info = json.loads(service_account)
+                cred = credentials.Certificate(service_account_info)
+            else:
+                # File path (local development)
+                if os.path.exists(service_account):
+                    cred = credentials.Certificate(service_account)
+                else:
+                    raise FileNotFoundError(f"Service account file not found: {service_account}")
+            
+            firebase_admin.initialize_app(cred)
+            firebase_initialized = True
+            print("✅ Firebase initialized successfully")
+        else:
+            print("⚠️ No Firebase service account configured")
 except Exception as e:
     print(f"Firebase initialization error: {e}")
     print("Running without Firebase authentication")
@@ -805,6 +821,34 @@ def generate_suggestions(message: str, agent_type: str) -> list:
     return suggestions[:2]  # Return max 2 suggestions
 
 
+
+@app.get("/")
+async def root():
+    """Root endpoint - NovaX AI Platform welcome"""
+    return {
+        "service": "NovaX AI Platform",
+        "version": "2.2.0",
+        "status": "online",
+        "company": "NovaX Technologies",
+        "ceo": "Rishav Kumar Jha",
+        "message": "Welcome to NovaX AI - Next-generation AI with structured reasoning",
+        "endpoints": {
+            "health": "/health",
+            "chat": "/chat",
+            "streaming_chat": "/chat/stream",
+            "agents": "/agents",
+            "realtime": "/api/realtime",
+            "search": "/api/search",
+            "docs": "/docs"
+        },
+        "features": [
+            "Advanced Structured Reasoning",
+            "Real-time Web Search",
+            "Multi-timezone Support",
+            "Image Generation",
+            "Parallel API Processing"
+        ]
+    }
 
 @app.get("/health")
 async def health_check():
