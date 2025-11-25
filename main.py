@@ -1313,12 +1313,24 @@ async def chat_stream(request: ChatRequest):
             if user_memory_context:
                 personalized_prompt += user_memory_context
             
+            # Add CEO/founder context if relevant
+            ceo_context = ""
+            if is_ceo_founder_query(request.message):
+                ceo_context = f"\n\nCEO/FOUNDER INFORMATION:\n"
+                ceo_context += f"🏢 CEO & Founder: Rishav Kumar Jha\n"
+                ceo_context += f"🚀 Company: NovaX Technologies\n"
+                ceo_context += f"💡 Creator of NovaX AI Platform\n"
+                ceo_context += f"☁️ Creator of NovaCloud Platform: [Access NovaCloud](https://novacloud22.web.app)\n"
+                ceo_context += f"🌟 Visionary entrepreneur building next-generation AI and cloud solutions\n"
+            
             # Generate prompt based on complexity analysis and topic relevance
             context_parts = []
             if datetime_context:
                 context_parts.append(f"Real-time Context:{datetime_context}")
             if search_context:
                 context_parts.append(f"Search Context:\n{search_context}")
+            if ceo_context:
+                context_parts.append(f"CEO Context:{ceo_context}")
             
             # Add file context if files are provided
             file_context = ""
@@ -1370,7 +1382,29 @@ async def chat_stream(request: ChatRequest):
             
             if complexity_analysis['complexity'] == 'simple':
                 # Simple responses with NovaX style
-                full_prompt = f"""{personalized_prompt}
+                if is_time_date_query(request.message):
+                    datetime_info = get_current_datetime_info()
+                    full_prompt = f"""{personalized_prompt}
+
+{context_str}{context_instruction}
+
+IMPORTANT: User is asking for current date/time. You MUST respond with this EXACT information:
+TODAY'S DATE: {datetime_info['current_date']}
+CURRENT TIME: {datetime_info['current_time_utc']}
+YEAR: {datetime_info['year']}
+
+Do NOT generate any other dates. Use ONLY the above real information.
+
+For simple queries, respond in NovaX style:
+- Start with a friendly emoji intro (⚡, 🚀, or 💫)
+- Give the EXACT date/time from above
+- Keep it warm and professional
+
+User: {request.message}
+
+NovaX AI:"""
+                else:
+                    full_prompt = f"""{personalized_prompt}
 
 {context_str}{context_instruction}
 
@@ -1731,8 +1765,8 @@ async def chat(request: ChatRequest):
             ceo_context += f"🏢 CEO & Founder: Rishav Kumar Jha\n"
             ceo_context += f"🚀 Company: NovaX Technologies\n"
             ceo_context += f"💡 Creator of NovaX AI Platform\n"
-            ceo_context += f"☁️ Also created NovaCloud: [NovaCloud Platform](https://novacloud22.web.app)\n"
-            ceo_context += f"🌟 Visionary entrepreneur building next-generation AI solutions\n"
+            ceo_context += f"☁️ Creator of NovaCloud Platform: [Access NovaCloud](https://novacloud22.web.app)\n"
+            ceo_context += f"🌟 Visionary entrepreneur building next-generation AI and cloud solutions\n"
         
         # Generate prompt based on complexity analysis and topic relevance
         context_parts = []
@@ -1777,7 +1811,29 @@ async def chat(request: ChatRequest):
         
         if complexity_analysis['complexity'] == 'simple':
             # Simple responses with NovaX style
-            full_prompt = f"""{personalized_prompt}
+            if is_time_date_query(request.message):
+                datetime_info = get_current_datetime_info()
+                full_prompt = f"""{personalized_prompt}
+
+{context_str}{context_instruction}
+
+IMPORTANT: User is asking for current date/time. You MUST respond with this EXACT information:
+TODAY'S DATE: {datetime_info['current_date']}
+CURRENT TIME: {datetime_info['current_time_utc']}
+YEAR: {datetime_info['year']}
+
+Do NOT generate any other dates. Use ONLY the above real information.
+
+For simple queries, respond in NovaX style:
+- Start with a friendly emoji intro (⚡, 🚀, or 💫)
+- Give the EXACT date/time from above
+- Keep it warm and professional
+
+User: {request.message}
+
+NovaX AI:"""
+            else:
+                full_prompt = f"""{personalized_prompt}
 
 {context_str}{context_instruction}
 
