@@ -30,7 +30,12 @@ app.include_router(pool_router)
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173", 
+        "http://localhost:3000",
+        "https://novaxai.web.app",
+        "https://novaxai.firebaseapp.com"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -823,6 +828,7 @@ def generate_suggestions(message: str, agent_type: str) -> list:
 
 
 @app.get("/")
+@app.head("/")
 async def root():
     """Root endpoint - NovaX AI Platform welcome"""
     return {
