@@ -390,11 +390,17 @@ def is_time_date_query(message: str) -> bool:
     """Check if the message is asking for current time or date"""
     message_lower = message.lower().strip()
     
+    # PRIORITY: Single word time/date queries (most common issue)
+    single_word_queries = ['time', 'date', 'today', 'now']
+    if message_lower in single_word_queries:
+        print(f"DEBUG: Single word query detected: {message_lower}")
+        return True
+    
     # Direct time/date queries
     time_date_patterns = [
         'what time is it', 'current time', 'what\'s the time', 'time now', 'time right now',
         'what date is it', 'current date', 'what\'s the date', 'today\'s date', 'date today', 'todays date',
-        'what is today date', 'what is todays date', 'what is the date today',
+        'what is today date', 'what is todays date', 'what is the date today', 'what is this date',
         'what day is it', 'what\'s today', 'today is', 'current day',
         'what year is it', 'current year', 'what month', 'current month', 'what minute',
         'what hour', 'current hour', 'current minute', 'time zone', 'timezone'
@@ -402,6 +408,7 @@ def is_time_date_query(message: str) -> bool:
     
     # Check for exact patterns
     if any(pattern in message_lower for pattern in time_date_patterns):
+        print(f"DEBUG: Pattern query detected: {message_lower}")
         return True
     
     # Check for simple time/date words with question structure
@@ -413,8 +420,10 @@ def is_time_date_query(message: str) -> bool:
         has_time_word = any(word in words for word in simple_time_words)
         has_question_word = any(word in words for word in question_words)
         if has_time_word and has_question_word:
+            print(f"DEBUG: Combined query detected: {message_lower}")
             return True
     
+    print(f"DEBUG: No time/date query detected: {message_lower}")
     return False
 
 def is_image_generation_query(message: str) -> bool:
@@ -1244,9 +1253,12 @@ async def chat_stream(request: ChatRequest):
             
             # DIRECT DATE/TIME RESPONSE - bypass AI for accuracy
             if is_time_date_query(request.message):
+                print(f"DEBUG: Streaming direct date/time response triggered for: {request.message}")
                 datetime_info = get_current_datetime_info()
                 ist_time = datetime_info['timezones']['IST']
                 direct_response = f"⚡ Here's today's date and time:\n\n📅 Current Date Today's date is {datetime_info['current_date']}.\n🕐 Indian Time {ist_time}\n🌍 UTC Time {datetime_info['current_time_utc']}\n\nNeed any other information about this date?"
+                
+                print(f"DEBUG: Streaming direct response: {direct_response[:100]}...")
                 
                 # Send direct response
                 yield f"data: {json.dumps({'type': 'response_start'})}\n\n"
@@ -1286,7 +1298,8 @@ async def chat_stream(request: ChatRequest):
                     # Send image end
                     yield f"data: {json.dumps({'type': 'image_end'})}\n\n"
                     
-                    yield f"data: {json.dumps({'type': 'response_chunk', 'content': '🎨 Image generated successfully!\n\nWant a different style or variation?'})}\n\n"
+                    image_success_msg = '🎨 Image generated successfully!\n\nWant a different style or variation?'
+                    yield f"data: {json.dumps({'type': 'response_chunk', 'content': image_success_msg})}\n\n"
                     yield f"data: {json.dumps({'type': 'response_end', 'suggestions': ['Generate another image', 'Different style', 'Change the scene']})}\n\n"
                     
                     # Save message to database with markdown format and correct MIME type
@@ -1298,7 +1311,8 @@ async def chat_stream(request: ChatRequest):
                     return
                 else:
                     print("Image generation failed")
-                    yield f"data: {json.dumps({'type': 'response_chunk', 'content': '🎨 **Image Generation Note:** The image service is currently unavailable. I\'ll provide you with a detailed description instead.\n\n'})}\n\n"
+                    image_error_msg = '🎨 **Image Generation Note:** The image service is currently unavailable. I\'ll provide you with a detailed description instead.\n\n'
+                    yield f"data: {json.dumps({'type': 'response_chunk', 'content': image_error_msg})}\n\n"
             
             # Always provide datetime context for time/date queries or Explorer agent
             if is_time_date_query(request.message) or (agent_type == 'NovaX Explorer' and not is_greeting):
@@ -1726,9 +1740,12 @@ async def chat(request: ChatRequest):
         
         # DIRECT DATE/TIME RESPONSE - bypass AI for accuracy
         if is_time_date_query(request.message):
+            print(f"DEBUG: Direct date/time response triggered for: {request.message}")
             datetime_info = get_current_datetime_info()
             ist_time = datetime_info['timezones']['IST']
             direct_response = f"⚡ Here's today's date and time:\n\n📅 Current Date Today's date is {datetime_info['current_date']}.\n🕐 Indian Time {ist_time}\n🌍 UTC Time {datetime_info['current_time_utc']}\n\nNeed any other information about this date?"
+            
+            print(f"DEBUG: Returning direct response: {direct_response[:100]}...")
             
             # Save and return immediately
             await database.save_message(user_id, chat_id, request.message, direct_response, 'NovaX Assistant')
