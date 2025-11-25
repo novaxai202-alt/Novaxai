@@ -1226,12 +1226,26 @@ async def chat_stream(request: ChatRequest):
                 generated_image = await image_generator.generate_image(request.message)
                 if generated_image:
                     print(f"Image generated successfully, size: {len(generated_image)} characters")
-                    yield f"data: {json.dumps({'type': 'image', 'content': generated_image})}\n\n"
+                    
+                    # Send image in smaller chunks to prevent JSON parsing errors
+                    chunk_size = 8000  # Safe chunk size for JSON
+                    image_chunks = [generated_image[i:i+chunk_size] for i in range(0, len(generated_image), chunk_size)]
+                    
+                    # Send image start
+                    image_type = 'jpeg' if generated_image.startswith('/9j/') else 'png'
+                    yield f"data: {json.dumps({'type': 'image_start', 'image_type': image_type, 'total_chunks': len(image_chunks)})}\n\n"
+                    
+                    # Send image chunks
+                    for i, chunk in enumerate(image_chunks):
+                        yield f"data: {json.dumps({'type': 'image_chunk', 'chunk_index': i, 'content': chunk})}\n\n"
+                    
+                    # Send image end
+                    yield f"data: {json.dumps({'type': 'image_end'})}\n\n"
+                    
                     yield f"data: {json.dumps({'type': 'response_chunk', 'content': '🎨 Image generated successfully!\n\nWant a different style or variation?'})}\n\n"
                     yield f"data: {json.dumps({'type': 'response_end', 'suggestions': ['Generate another image', 'Different style', 'Change the scene']})}\n\n"
                     
                     # Save message to database with markdown format and correct MIME type
-                    image_type = 'jpeg' if generated_image.startswith('/9j/') else 'png'
                     final_response = f"![Generated Image](data:image/{image_type};base64,{generated_image})\n\n🎨 Image generated successfully!\n\nWant a different style or variation?"
                     await database.save_message(user_id, chat_id, request.message, final_response, agent_type)
                     await database.update_chat_title_if_new(chat_id, request.message)
