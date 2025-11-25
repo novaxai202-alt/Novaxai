@@ -45,26 +45,38 @@ app.add_middleware(
 firebase_initialized = False
 try:
     if not firebase_admin._apps:
-        service_account = os.getenv("FIREBASE_SERVICE_ACCOUNT")
-        if service_account:
+        # Try FIREBASE_SERVICE_ACCOUNT_JSON first (Render), then FIREBASE_SERVICE_ACCOUNT (local)
+        service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+        service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+        
+        if service_account_json:
+            # Direct JSON content (Render environment)
+            import json
+            import html
+            # Decode HTML entities from Render environment
+            decoded_json = html.unescape(service_account_json)
+            service_account_info = json.loads(decoded_json)
+            cred = credentials.Certificate(service_account_info)
+        elif service_account_path:
             # Check if it's a file path or JSON content
-            if service_account.startswith('{'):
-                # Direct JSON content (Render environment)
+            if service_account_path.startswith('{'):
+                # Direct JSON content
                 import json
-                service_account_info = json.loads(service_account)
+                service_account_info = json.loads(service_account_path)
                 cred = credentials.Certificate(service_account_info)
             else:
                 # File path (local development)
-                if os.path.exists(service_account):
-                    cred = credentials.Certificate(service_account)
+                if os.path.exists(service_account_path):
+                    cred = credentials.Certificate(service_account_path)
                 else:
-                    raise FileNotFoundError(f"Service account file not found: {service_account}")
-            
-            firebase_admin.initialize_app(cred)
-            firebase_initialized = True
-            print("✅ Firebase initialized successfully")
+                    raise FileNotFoundError(f"Service account file not found: {service_account_path}")
         else:
             print("⚠️ No Firebase service account configured")
+            firebase_initialized = False
+        
+        firebase_admin.initialize_app(cred)
+        firebase_initialized = True
+        print("✅ Firebase initialized successfully")
 except Exception as e:
     print(f"Firebase initialization error: {e}")
     print("Running without Firebase authentication")
