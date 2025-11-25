@@ -62,9 +62,9 @@ class FastCache:
         }
 
 # Global cache instances
-response_cache = FastCache(ttl=300)  # 5 min for responses
-search_cache = FastCache(ttl=600)    # 10 min for search results
-datetime_cache = FastCache(ttl=60)   # 1 min for datetime
+response_cache = FastCache(default_ttl=300)  # 5 min for responses
+search_cache = FastCache(default_ttl=600)    # 10 min for search results
+datetime_cache = FastCache(default_ttl=60)   # 1 min for datetime
 
 async def cache_ai_response(prompt: str, response: str) -> None:
     """Cache AI response"""
