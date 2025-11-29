@@ -463,18 +463,33 @@ def detect_user_intent(message: str) -> str:
     if is_time_date_query(message):
         return 'NovaX Assistant'  # Use Assistant for direct time/date, not Explorer
     
-    # Real-time and search queries (excluding personal/time questions)
-    realtime_keywords = ['search for', 'find news', 'lookup', 'latest news', 'breaking news', 
-                        'weather', 'stock', 'price', 'recent news', 'happening today', 'live news', 
-                        'real-time', 'update', 'trending']
+    # Enhanced web search detection
+    search_keywords = [
+        'search for', 'search about', 'find information', 'lookup', 'look up',
+        'latest news', 'breaking news', 'current news', 'recent news', 'news about',
+        'what\'s happening', 'happening today', 'live news', 'trending',
+        'weather in', 'weather for', 'temperature in',
+        'stock price', 'share price', 'market price', 'crypto price',
+        'latest update', 'recent update', 'current status',
+        'find out about', 'tell me about current', 'what\'s new',
+        'real-time', 'live data', 'current information'
+    ]
+    
+    # Web search trigger patterns
+    search_patterns = [
+        'search', 'find', 'lookup', 'latest', 'current', 'recent', 'breaking',
+        'news', 'weather', 'stock', 'price', 'trending', 'happening', 'update'
+    ]
     
     # Personal questions that should NOT trigger web search
-    personal_keywords = ['what is my', 'my name', 'who am i', 'tell me about me']
+    personal_keywords = ['what is my', 'my name', 'who am i', 'tell me about me', 'remember', 'my previous']
     
     # Don't use Explorer for personal questions
     if any(personal in message_lower for personal in personal_keywords):
         return 'NovaX Assistant'
-    elif any(word in message_lower for word in realtime_keywords):
+    elif any(keyword in message_lower for keyword in search_keywords):
+        return 'NovaX Explorer'
+    elif any(pattern in message_lower for pattern in search_patterns) and len(message.split()) > 2:
         return 'NovaX Explorer'
     elif any(word in message_lower for word in ['code', 'debug', 'program', 'function', 'api', 'database']):
         return 'NovaX Developer'
@@ -1325,13 +1340,21 @@ async def chat_stream(request: ChatRequest):
                 for tz, time_str in datetime_info['timezones'].items():
                     datetime_context += f"   {tz}: {time_str}\n"
             
-            # Only perform web search for Explorer agent (not for direct time/date queries)
+            # Perform web search for Explorer agent (not for direct time/date queries)
             if agent_type == 'NovaX Explorer' and not is_greeting and not is_time_date_query(request.message):
+                # Send search status
+                yield f"data: {json.dumps({'type': 'search_start', 'query': request.message})}\n\n"
+                
                 # Perform web search for additional context
                 search_results = await novax_search.search(request.message, 5)
                 if search_results["results"]:
                     search_context = novax_search.format_search_context(search_results, request.message)
                     citations = novax_search.generate_citations(search_results)
+                    
+                    # Send search results
+                    yield f"data: {json.dumps({'type': 'search_complete', 'results_count': len(search_results['results'])})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'search_complete', 'results_count': 0})}\n\n"
             
             # Get user memory for persistent context
             user_memory_context = await database.get_user_context_for_ai(user_id)
@@ -1614,7 +1637,7 @@ NovaX AI:"""
             # Generate helpful suggestions
             suggestions = generate_suggestions(request.message, agent_type)
             if agent_type == 'NovaX Explorer':
-                suggestions.extend(["Get more recent updates?", "Check different time zones?"])
+                suggestions.extend(["Search for more details?", "Get latest updates?"])
             
             # Save message to database
             await database.save_message(user_id, chat_id, request.message, full_response, agent_type)
@@ -1817,7 +1840,7 @@ async def chat(request: ChatRequest):
             for tz, time_str in datetime_info['timezones'].items():
                 datetime_context += f"   {tz}: {time_str}\n"
         
-        # Only perform web search for Explorer agent (not for direct time/date queries)
+        # Perform web search for Explorer agent (not for direct time/date queries)
         if agent_type == 'NovaX Explorer' and not is_greeting and not is_time_date_query(request.message):
             # Check cache first
             cached_search = await get_cached_search(request.message)
@@ -2100,7 +2123,7 @@ NovaX AI:"""
         
         # Add real-time suggestions for Explorer mode
         if agent_type == 'NovaX Explorer':
-            suggestions.extend(["Get more recent updates?", "Check different time zones?"])
+            suggestions.extend(["Search for more details?", "Get latest updates?"])
         
         # Save message to database
         print(f"Saving message to chat {chat_id}: {request.message[:50]}...")
