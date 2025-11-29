@@ -11,7 +11,7 @@ from image_service import image_generator
 from gemini_pool import initialize_gemini_pool, get_gemini_pool
 from pool_status import router as pool_router
 from parallel_utils import FastParallelProcessor, optimize_for_render
-from fast_cache import response_cache, search_cache, get_cached_response, cache_ai_response, get_cached_search, cache_search_results
+from fast_cache import response_cache, search_cache, get_cached_response, cache_ai_response, get_cached_search, cache_search_results, start_cleanup_task
 import os
 import re
 import uuid
@@ -1378,15 +1378,31 @@ async def chat_stream(request: ChatRequest):
                     file_context += f"File {i+1}: {file_content[:2000]}...\n\n"
                 context_parts.append(f"File Context:{file_context}")
             
-            # Add chat context if topic is related OR if user asks to continue
-            if (topic_analysis['context_needed'] or 'continue' in request.message.lower()) and chat_history:
-                recent_messages = chat_history[-3:] if len(chat_history) >= 3 else chat_history
+            # Add current chat context
+            if chat_history:
+                recent_messages = chat_history[-2:] if len(chat_history) >= 2 else chat_history
                 if recent_messages:
-                    chat_context = "\n\nRecent conversation context:\n"
+                    chat_context = "\n\nCurrent chat context:\n"
                     for msg in recent_messages:
-                        chat_context += f"User: {msg.get('message', '')[:150]}\n"
-                        chat_context += f"Assistant: {msg.get('response', '')[:150]}\n\n"
-                    context_parts.append(f"Chat Context:{chat_context}")
+                        chat_context += f"User: {msg.get('message', '')[:100]}\n"
+                        chat_context += f"Assistant: {msg.get('response', '')[:100]}\n\n"
+                    context_parts.append(f"Current Chat:{chat_context}")
+            
+            # Always add cross-session memory (like ChatGPT)
+            try:
+                all_user_chats = await database.get_all_user_messages(user_id)
+                if all_user_chats:
+                    # Get messages from other chats (exclude current chat)
+                    other_chats = [msg for msg in all_user_chats if msg.get('chat_id') != chat_id]
+                    if other_chats:
+                        cross_session = other_chats[-10:]  # Last 10 messages from other chats
+                        memory_context = "\n\nPrevious sessions memory:\n"
+                        for msg in cross_session:
+                            memory_context += f"User: {msg.get('message', '')[:80]}\n"
+                            memory_context += f"Assistant: {msg.get('response', '')[:80]}\n\n"
+                        context_parts.append(f"Cross-Session Memory:{memory_context}")
+            except Exception as memory_error:
+                print(f"Cross-session memory error: {memory_error}")
             
             context_str = "\n\n".join(context_parts) if context_parts else ""
             
@@ -1556,20 +1572,35 @@ NovaX AI:"""
             yield f"data: {json.dumps({'type': 'response_start'})}\n\n"
             
             full_response = ""
+            response_length = 0
+            max_response_length = 50000  # Limit response to 50k characters
+            
             for chunk in response:
                 if chunk.text:
+                    # Check response length limit
+                    if response_length > max_response_length:
+                        truncation_msg = "\n\n[Response truncated due to length. Please ask for specific parts if you need more details.]"
+                        yield f"data: {json.dumps({'type': 'response_chunk', 'content': truncation_msg})}\n\n"
+                        break
+                    
                     # Filter response to ensure brand safety and decode HTML entities
                     import html
                     filtered_chunk = filter_brand_unsafe_content(chunk.text)
                     filtered_chunk = html.unescape(filtered_chunk)
                     full_response += filtered_chunk
+                    response_length += len(filtered_chunk)
                     
                     # Send each word separately for typewriter effect
                     words = filtered_chunk.split(' ')
                     for word in words:
                         if word.strip():
-                            yield f"data: {json.dumps({'type': 'response_chunk', 'content': word + ' '})}\n\n"
-                            await asyncio.sleep(0.05)  # Adjust speed here
+                            try:
+                                yield f"data: {json.dumps({'type': 'response_chunk', 'content': word + ' '})}\n\n"
+                                await asyncio.sleep(0.05)  # Adjust speed here
+                            except Exception as chunk_error:
+                                # Skip problematic chunks to prevent stream breaking
+                                print(f"Chunk error (skipping): {chunk_error}")
+                                continue
             
             # Apply NovaX formatting to the complete response
             full_response = format_novax_response(full_response, complexity_analysis, agent_type)
@@ -1598,7 +1629,14 @@ NovaX AI:"""
             yield f"data: {json.dumps({'type': 'response_end', 'suggestions': suggestions})}\n\n"
             
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            error_message = "I encountered an issue processing your request. Please try again."
+            if "timeout" in str(e).lower():
+                error_message = "The response took too long to generate. Please try a shorter request."
+            elif "json" in str(e).lower() or "parse" in str(e).lower():
+                error_message = "There was a formatting issue. Please try rephrasing your request."
+            
+            print(f"Stream error: {str(e)}")
+            yield f"data: {json.dumps({'type': 'error', 'message': error_message})}\n\n"
     
     return StreamingResponse(
         generate_stream(),
@@ -1827,15 +1865,31 @@ async def chat(request: ChatRequest):
         if ceo_context:
             context_parts.append(f"CEO Context:{ceo_context}")
         
-        # Add chat context if topic is related OR if user asks to continue
-        if (topic_analysis['context_needed'] or 'continue' in request.message.lower()) and chat_history:
-            recent_messages = chat_history[-3:] if len(chat_history) >= 3 else chat_history
+        # Add current chat context
+        if chat_history:
+            recent_messages = chat_history[-2:] if len(chat_history) >= 2 else chat_history
             if recent_messages:
-                chat_context = "\n\nRecent conversation context:\n"
+                chat_context = "\n\nCurrent chat context:\n"
                 for msg in recent_messages:
-                    chat_context += f"User: {msg.get('message', '')[:150]}\n"
-                    chat_context += f"Assistant: {msg.get('response', '')[:150]}\n\n"
-                context_parts.append(f"Chat Context:{chat_context}")
+                    chat_context += f"User: {msg.get('message', '')[:100]}\n"
+                    chat_context += f"Assistant: {msg.get('response', '')[:100]}\n\n"
+                context_parts.append(f"Current Chat:{chat_context}")
+        
+        # Always add cross-session memory (like ChatGPT)
+        try:
+            all_user_chats = await database.get_all_user_messages(user_id)
+            if all_user_chats:
+                # Get messages from other chats (exclude current chat)
+                other_chats = [msg for msg in all_user_chats if msg.get('chat_id') != chat_id]
+                if other_chats:
+                    cross_session = other_chats[-10:]  # Last 10 messages from other chats
+                    memory_context = "\n\nPrevious sessions memory:\n"
+                    for msg in cross_session:
+                        memory_context += f"User: {msg.get('message', '')[:80]}\n"
+                        memory_context += f"Assistant: {msg.get('response', '')[:80]}\n\n"
+                    context_parts.append(f"Cross-Session Memory:{memory_context}")
+        except Exception as memory_error:
+            print(f"Cross-session memory error: {memory_error}")
         
         context_str = "\n\n".join(context_parts) if context_parts else ""
         
@@ -2071,4 +2125,5 @@ NovaX AI:"""
 
 if __name__ == "__main__":
     import uvicorn
+    start_cleanup_task()  # Start cache cleanup
     uvicorn.run(app, host="0.0.0.0", port=8000)
