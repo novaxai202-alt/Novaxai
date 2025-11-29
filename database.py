@@ -3,7 +3,7 @@ from firebase_admin import firestore
 from models import ChatMessage, ChatSession, UserSettings
 from typing import List, Optional
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 class DatabaseManager:
     def __init__(self):
@@ -353,7 +353,7 @@ class DatabaseManager:
     async def create_shared_chat(self, chat_id: str, owner_id: str, share_type: str = "public", recipient_email: str = None, expires_in_days: int = 7) -> str:
         """Create a shareable link for a chat"""
         share_id = str(uuid.uuid4())
-        expires_at = datetime.now() + timedelta(days=expires_in_days) if expires_in_days else None
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days) if expires_in_days else None
         
         share_data = {
             "id": share_id,
@@ -383,9 +383,18 @@ class DatabaseManager:
             doc = db.collection("shared_chats").document(share_id).get()
             if doc.exists:
                 share_data = doc.to_dict()
+                print(f"Found share data: {share_data}")
                 # Check if share is still active and not expired
-                if share_data.get("is_active") and (not share_data.get("expires_at") or share_data["expires_at"] > datetime.now()):
-                    return share_data
+                if share_data.get("is_active", True):
+                    expires_at = share_data.get("expires_at")
+                    if not expires_at or expires_at > datetime.now(expires_at.tzinfo if hasattr(expires_at, 'tzinfo') else None):
+                        return share_data
+                    else:
+                        print(f"Share expired: {expires_at}")
+                else:
+                    print(f"Share not active: {share_data.get('is_active')}")
+            else:
+                print(f"Share document not found: {share_id}")
             return None
         except Exception as e:
             print(f"Error getting shared chat: {e}")
