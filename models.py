@@ -67,3 +67,21 @@ class ChatResponse(BaseModel):
     agent_type: str = "NovaX Assistant"
     suggestions: list = []
     chat_id: str
+
+class ShareRequest(BaseModel):
+    chat_id: str
+    token: str
+    recipient_email: Optional[str] = None
+    share_type: str = "public"  # "public" or "private"
+    expires_in_days: Optional[int] = 7
+
+class SharedChat(BaseModel):
+    id: str
+    chat_id: str
+    owner_id: str
+    share_type: str
+    recipient_email: Optional[str] = None
+    share_url: str
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    is_active: bool = True
