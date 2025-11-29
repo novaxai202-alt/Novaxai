@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from models import ChatRequest, ChatResponse, UserSettings
+from models import ChatRequest, ChatResponse, UserSettings, ShareRequest, SharedChat
 import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials, auth
@@ -1106,6 +1106,105 @@ async def update_user_memory(request: dict):
         
         await database.save_user_memory(user_id, memory_data)
         return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Share functionality endpoints
+@app.post("/api/share/create")
+async def create_share_link(request: ShareRequest):
+    try:
+        user_id = "demo_user"
+        if firebase_initialized and request.token:
+            try:
+                decoded_token = auth.verify_id_token(request.token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        share_id = await database.create_shared_chat(
+            chat_id=request.chat_id,
+            owner_id=user_id,
+            share_type=request.share_type,
+            recipient_email=request.recipient_email,
+            expires_in_days=request.expires_in_days
+        )
+        
+        return {
+            "success": True,
+            "share_id": share_id,
+            "share_url": f"/shared/{share_id}",
+            "message": "Chat shared successfully!"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/shared/{share_id}")
+async def get_shared_chat_data(share_id: str):
+    try:
+        share_data = await database.get_shared_chat(share_id)
+        if not share_data:
+            raise HTTPException(status_code=404, detail="Shared chat not found or expired")
+        
+        # Get chat messages
+        messages = await database.get_chat_messages(share_data["chat_id"])
+        
+        # Get chat session info
+        chat_session = None
+        db = database.get_db()
+        if db:
+            doc = db.collection("chat_sessions").document(share_data["chat_id"]).get()
+            if doc.exists:
+                chat_session = doc.to_dict()
+        
+        return {
+            "success": True,
+            "share_data": share_data,
+            "chat_session": chat_session,
+            "messages": messages
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/share/list/{user_token}")
+async def get_user_shares(user_token: str):
+    try:
+        user_id = "demo_user"
+        if firebase_initialized and user_token:
+            try:
+                decoded_token = auth.verify_id_token(user_token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        shares = await database.get_user_shared_chats(user_id)
+        return {"shares": shares}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/share/{share_id}")
+async def revoke_share_link(share_id: str, request: dict):
+    try:
+        token = request.get("token")
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        success = await database.revoke_shared_chat(share_id, user_id)
+        if success:
+            return {"success": True, "message": "Share link revoked"}
+        else:
+            raise HTTPException(status_code=403, detail="Not authorized to revoke this share")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
