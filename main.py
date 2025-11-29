@@ -1122,6 +1122,13 @@ async def create_share_link(request: ShareRequest):
                 print(f"Token validation failed: {token_error}")
                 user_id = "demo_user"
         
+        print(f"Creating share for chat {request.chat_id} by user {user_id}")
+        
+        # Verify chat exists and has messages
+        messages = await database.get_chat_messages(request.chat_id)
+        if not messages:
+            raise HTTPException(status_code=400, detail="Cannot share empty chat")
+        
         share_id = await database.create_shared_chat(
             chat_id=request.chat_id,
             owner_id=user_id,
@@ -1130,24 +1137,33 @@ async def create_share_link(request: ShareRequest):
             expires_in_days=request.expires_in_days
         )
         
+        print(f"Created share with ID: {share_id}")
+        
         return {
             "success": True,
             "share_id": share_id,
             "share_url": f"/shared/{share_id}",
             "message": "Chat shared successfully!"
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"Error creating share: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/shared/{share_id}")
 async def get_shared_chat_data(share_id: str):
     try:
+        print(f"Getting shared chat: {share_id}")
         share_data = await database.get_shared_chat(share_id)
         if not share_data:
+            print(f"Share data not found for: {share_id}")
             raise HTTPException(status_code=404, detail="Shared chat not found or expired")
         
+        print(f"Found share data, getting messages for chat: {share_data['chat_id']}")
         # Get chat messages
         messages = await database.get_chat_messages(share_data["chat_id"])
+        print(f"Found {len(messages)} messages")
         
         # Get chat session info
         chat_session = None
@@ -1156,6 +1172,7 @@ async def get_shared_chat_data(share_id: str):
             doc = db.collection("chat_sessions").document(share_data["chat_id"]).get()
             if doc.exists:
                 chat_session = doc.to_dict()
+                print(f"Found chat session: {chat_session.get('title', 'No title')}")
         
         return {
             "success": True,
@@ -1166,6 +1183,7 @@ async def get_shared_chat_data(share_id: str):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Error in get_shared_chat_data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/share/list/{user_token}")
