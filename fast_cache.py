@@ -91,5 +91,14 @@ async def cleanup_caches():
         await search_cache.clear_expired()
         await datetime_cache.clear_expired()
 
-# Start cleanup task
-asyncio.create_task(cleanup_caches())
+# Cleanup task will be started when event loop is running
+_cleanup_task = None
+
+def start_cleanup_task():
+    """Start cleanup task when event loop is available"""
+    global _cleanup_task
+    if _cleanup_task is None:
+        try:
+            _cleanup_task = asyncio.create_task(cleanup_caches())
+        except RuntimeError:
+            pass  # No event loop running yet
