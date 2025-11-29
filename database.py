@@ -3,7 +3,7 @@ from firebase_admin import firestore
 from models import ChatMessage, ChatSession, UserSettings
 from typing import List, Optional
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class DatabaseManager:
     def __init__(self):
@@ -348,6 +348,80 @@ class DatabaseManager:
                 context += "🟢 Response Style:\n" + "\n".join(response_style) + "\n"
         
         return context
+    
+    # Share functionality
+    async def create_shared_chat(self, chat_id: str, owner_id: str, share_type: str = "public", recipient_email: str = None, expires_in_days: int = 7) -> str:
+        """Create a shareable link for a chat"""
+        share_id = str(uuid.uuid4())
+        expires_at = datetime.now() + timedelta(days=expires_in_days) if expires_in_days else None
+        
+        share_data = {
+            "id": share_id,
+            "chat_id": chat_id,
+            "owner_id": owner_id,
+            "share_type": share_type,
+            "recipient_email": recipient_email,
+            "share_url": f"/shared/{share_id}",
+            "created_at": datetime.now(),
+            "expires_at": expires_at,
+            "is_active": True
+        }
+        
+        db = self.get_db()
+        if db:
+            db.collection("shared_chats").document(share_id).set(share_data)
+        
+        return share_id
+    
+    async def get_shared_chat(self, share_id: str) -> dict:
+        """Get shared chat data"""
+        db = self.get_db()
+        if not db:
+            return None
+        
+        try:
+            doc = db.collection("shared_chats").document(share_id).get()
+            if doc.exists:
+                share_data = doc.to_dict()
+                # Check if share is still active and not expired
+                if share_data.get("is_active") and (not share_data.get("expires_at") or share_data["expires_at"] > datetime.now()):
+                    return share_data
+            return None
+        except Exception as e:
+            print(f"Error getting shared chat: {e}")
+            return None
+    
+    async def get_user_shared_chats(self, user_id: str) -> List[dict]:
+        """Get all shared chats created by user"""
+        db = self.get_db()
+        if not db:
+            return []
+        
+        try:
+            shares = db.collection("shared_chats").where(filter=firestore.FieldFilter("owner_id", "==", user_id)).stream()
+            share_list = [share.to_dict() for share in shares]
+            share_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+            return share_list
+        except Exception as e:
+            print(f"Error getting user shared chats: {e}")
+            return []
+    
+    async def revoke_shared_chat(self, share_id: str, user_id: str) -> bool:
+        """Revoke a shared chat link"""
+        db = self.get_db()
+        if not db:
+            return False
+        
+        try:
+            # Verify ownership
+            doc = db.collection("shared_chats").document(share_id).get()
+            if doc.exists and doc.to_dict().get("owner_id") == user_id:
+                db.collection("shared_chats").document(share_id).update({"is_active": False})
+                return True
+            return False
+        except Exception as e:
+            print(f"Error revoking shared chat: {e}")
+            return False
 
 # Global database instance
 database = DatabaseManager()
