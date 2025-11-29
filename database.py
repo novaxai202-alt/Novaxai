@@ -126,6 +126,21 @@ class DatabaseManager:
             print(f"Error getting chat messages: {e}")
             return []
     
+    async def get_all_user_messages(self, user_id: str) -> List[dict]:
+        """Get all messages from all chats for cross-session memory"""
+        db = self.get_db()
+        if not db:
+            return []
+        try:
+            messages = db.collection("chat_messages").where(filter=firestore.FieldFilter("user_id", "==", user_id)).stream()
+            message_list = [message.to_dict() for message in messages]
+            # Sort by timestamp in Python instead of Firestore
+            message_list.sort(key=lambda x: x.get('timestamp', datetime.min))
+            return message_list
+        except Exception as e:
+            print(f"Error getting all user messages: {e}")
+            return []
+    
     # User Settings
     async def get_user_settings(self, user_id: str) -> dict:
         db = self.get_db()
