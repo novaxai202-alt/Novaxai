@@ -1,3 +1,5 @@
+from analytics_service import get_analytics_service
+from voice_service import get_voice_service
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -1713,34 +1715,60 @@ NovaX AI:"""
             
             full_response = ""
             response_length = 0
-            max_response_length = 50000  # Limit response to 50k characters
+            max_response_length = 100000  # Increased limit to 100k characters
+            chunk_count = 0
+            max_chunks = 2000  # Limit number of chunks to prevent memory issues
             
-            for chunk in response:
-                if chunk.text:
-                    # Check response length limit
-                    if response_length > max_response_length:
-                        truncation_msg = "\n\n[Response truncated due to length. Please ask for specific parts if you need more details.]"
-                        yield f"data: {json.dumps({'type': 'response_chunk', 'content': truncation_msg})}\n\n"
-                        break
-                    
-                    # Filter response to ensure brand safety and decode HTML entities
-                    import html
-                    filtered_chunk = filter_brand_unsafe_content(chunk.text)
-                    filtered_chunk = html.unescape(filtered_chunk)
-                    full_response += filtered_chunk
-                    response_length += len(filtered_chunk)
-                    
-                    # Send each word separately for typewriter effect
-                    words = filtered_chunk.split(' ')
-                    for word in words:
-                        if word.strip():
-                            try:
-                                yield f"data: {json.dumps({'type': 'response_chunk', 'content': word + ' '})}\n\n"
-                                await asyncio.sleep(0.05)  # Adjust speed here
-                            except Exception as chunk_error:
-                                # Skip problematic chunks to prevent stream breaking
-                                print(f"Chunk error (skipping): {chunk_error}")
-                                continue
+            try:
+                for chunk in response:
+                    if chunk.text:
+                        chunk_count += 1
+                        
+                        # Check both response length and chunk count limits
+                        if response_length > max_response_length or chunk_count > max_chunks:
+                            truncation_msg = "\n\n[Response truncated due to length. The response was very comprehensive! Feel free to ask for specific parts or continue the conversation.]"
+                            yield f"data: {json.dumps({'type': 'response_chunk', 'content': truncation_msg})}\n\n"
+                            break
+                        
+                        # Filter response to ensure brand safety and decode HTML entities
+                        import html
+                        try:
+                            filtered_chunk = filter_brand_unsafe_content(chunk.text)
+                            filtered_chunk = html.unescape(filtered_chunk)
+                            full_response += filtered_chunk
+                            response_length += len(filtered_chunk)
+                            
+                            # Send chunks in larger pieces for better performance with long responses
+                            if len(filtered_chunk) > 100:  # Large chunk, send in parts
+                                words = filtered_chunk.split(' ')
+                                word_groups = [words[i:i+5] for i in range(0, len(words), 5)]  # Group 5 words
+                                
+                                for word_group in word_groups:
+                                    if word_group:
+                                        try:
+                                            group_text = ' '.join(word_group) + ' '
+                                            yield f"data: {json.dumps({'type': 'response_chunk', 'content': group_text})}\n\n"
+                                            await asyncio.sleep(0.02)  # Faster for long responses
+                                        except Exception as chunk_error:
+                                            print(f"Word group error (skipping): {chunk_error}")
+                                            continue
+                            else:  # Small chunk, send as is
+                                try:
+                                    yield f"data: {json.dumps({'type': 'response_chunk', 'content': filtered_chunk})}\n\n"
+                                    await asyncio.sleep(0.03)
+                                except Exception as chunk_error:
+                                    print(f"Small chunk error (skipping): {chunk_error}")
+                                    continue
+                                    
+                        except Exception as filter_error:
+                            print(f"Filtering error (skipping chunk): {filter_error}")
+                            continue
+                            
+            except Exception as response_error:
+                print(f"Response iteration error: {response_error}")
+                # Don't break the stream, just log and continue
+                error_msg = "\n\n[Encountered an issue while processing the response, but continuing...]"
+                yield f"data: {json.dumps({'type': 'response_chunk', 'content': error_msg})}\n\n"
             
             # Apply NovaX formatting to the complete response
             full_response = format_novax_response(full_response, complexity_analysis, agent_type)
@@ -1769,11 +1797,22 @@ NovaX AI:"""
             yield f"data: {json.dumps({'type': 'response_end', 'suggestions': suggestions})}\n\n"
             
         except Exception as e:
-            error_message = "I encountered an issue processing your request. Please try again."
-            if "timeout" in str(e).lower():
-                error_message = "The response took too long to generate. Please try a shorter request."
-            elif "json" in str(e).lower() or "parse" in str(e).lower():
-                error_message = "There was a formatting issue. Please try rephrasing your request."
+            error_message = "I encountered an issue processing your request."
+            
+            # Provide specific error messages based on error type
+            error_str = str(e).lower()
+            if "timeout" in error_str or "timed out" in error_str:
+                error_message = "The response took longer than expected. This often happens with very detailed requests. Try breaking your question into smaller parts."
+            elif "json" in error_str or "parse" in error_str:
+                error_message = "There was a formatting issue with the response. Please try rephrasing your request or asking for a shorter response."
+            elif "memory" in error_str or "limit" in error_str:
+                error_message = "Your request generated a very large response. Try asking for specific sections or a more focused question."
+            elif "rate" in error_str or "quota" in error_str:
+                error_message = "The AI service is currently busy. Please wait a moment and try again."
+            elif "connection" in error_str or "network" in error_str:
+                error_message = "Network connection issue. Please check your internet connection and try again."
+            elif "invalid" in error_str:
+                error_message = "There was an issue with your request format. Please try rephrasing your question."
             
             print(f"Stream error: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'message': error_message})}\n\n"
@@ -1872,6 +1911,120 @@ async def upload_files(files: List[UploadFile] = File(...), token: str = Form(..
             "success": True,
             "files": uploaded_files,
             "message": f"Successfully uploaded {len(files)} file(s). You can now ask me to analyze, summarize, or work with these files."
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analytics")
+async def get_user_analytics(range: str = "7d", token: str = None):
+    """Get user analytics data"""
+    try:
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        analytics_service = get_analytics_service()
+        analytics = await analytics_service.get_user_analytics(user_id, range)
+        
+        return analytics
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analytics/export")
+async def export_analytics(range: str = "30d", token: str = None):
+    """Export analytics data as CSV"""
+    try:
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        analytics_service = get_analytics_service()
+        csv_data = await analytics_service.export_analytics_csv(user_id, range)
+        
+        from fastapi.responses import Response
+        return Response(
+            content=csv_data,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=novax-analytics-{range}.csv"}
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/voice/speech-to-text")
+async def speech_to_text(audio_file: UploadFile = File(...), language: str = "en-US"):
+    """Convert speech audio to text"""
+    try:
+        # Read audio file
+        audio_data = await audio_file.read()
+        
+        # Process with voice service
+        voice_service = get_voice_service()
+        result = await voice_service.speech_to_text(audio_data, language)
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/voice/text-to-speech")
+async def text_to_speech(request: dict):
+    """Convert text to speech audio"""
+    try:
+        text = request.get('text', '')
+        language = request.get('language', 'en')
+        voice_speed = request.get('voice_speed', 1.0)
+        
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+        
+        # Process with voice service
+        voice_service = get_voice_service()
+        result = await voice_service.text_to_speech(text, language, voice_speed)
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/voice/live-recognition")
+async def live_speech_recognition(request: dict):
+    """Perform live speech recognition"""
+    try:
+        duration = request.get('duration', 5)
+        language = request.get('language', 'en-US')
+        
+        # Process with voice service
+        voice_service = get_voice_service()
+        result = await voice_service.live_speech_recognition(duration, language)
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/voice/languages")
+async def get_voice_languages():
+    """Get supported voice languages"""
+    try:
+        voice_service = get_voice_service()
+        languages = voice_service.get_supported_languages()
+        
+        return {
+            "success": True,
+            "languages": languages
         }
         
     except Exception as e:
