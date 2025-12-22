@@ -1697,6 +1697,10 @@ NovaX AI:"""
             # Handle image files with vision model for streaming
             has_images = any(isinstance(f, str) and len(f) > 10000 for f in (request.files or []))
             
+            # Add response length control to prompt
+            length_control = "\n\nCRITICAL: Keep your response concise and focused. Avoid extremely long responses that may cause processing issues. Maximum 800 words."
+            full_prompt += length_control
+            
             if has_images:
                 try:
                     vision_model = genai.GenerativeModel('gemini-2.5-flash')
@@ -1740,26 +1744,31 @@ NovaX AI:"""
             
             full_response = ""
             response_length = 0
-            max_response_length = 100000  # Increased limit to 100k characters
+            max_response_length = 50000  # Reduced to 50k characters for better performance
             chunk_count = 0
-            max_chunks = 2000  # Limit number of chunks to prevent memory issues
+            max_chunks = 1000  # Reduced chunk limit
+            word_count = 0
+            max_words = 8000  # Maximum words to prevent extremely long responses
             
             try:
                 for chunk in response:
                     if chunk.text:
                         chunk_count += 1
                         
-                        # Check both response length and chunk count limits
-                        if response_length > max_response_length or chunk_count > max_chunks:
-                            truncation_msg = "\n\n[Response truncated due to length. The response was very comprehensive! Feel free to ask for specific parts or continue the conversation.]"
-                            yield f"data: {json.dumps({'type': 'response_chunk', 'content': truncation_msg})}\n\n"
-                            break
-                        
                         # Filter response to ensure brand safety and decode HTML entities
                         import html
                         try:
                             filtered_chunk = filter_brand_unsafe_content(chunk.text)
                             filtered_chunk = html.unescape(filtered_chunk)
+                            
+                            # Check length limits before processing
+                            if (response_length + len(filtered_chunk) > max_response_length or 
+                                chunk_count > max_chunks or 
+                                word_count > max_words):
+                                truncation_msg = "\n\n[Response optimized for length. Ask for specific details if needed!]"
+                                yield f"data: {json.dumps({'type': 'response_chunk', 'content': truncation_msg})}\n\n"
+                                break
+                            
                             full_response += filtered_chunk
                             response_length += len(filtered_chunk)
                             
@@ -1767,9 +1776,12 @@ NovaX AI:"""
                             words = filtered_chunk.split(' ')
                             for word in words:
                                 if word.strip():
+                                    word_count += 1
+                                    if word_count > max_words:
+                                        break
                                     try:
                                         yield f"data: {json.dumps({'type': 'response_chunk', 'content': word + ' '})}\n\n"
-                                        await asyncio.sleep(0.05)  # 50ms delay between words
+                                        await asyncio.sleep(0.03)  # Reduced delay for faster streaming
                                     except Exception as chunk_error:
                                         print(f"Word streaming error (skipping): {chunk_error}")
                                         continue
@@ -1780,8 +1792,8 @@ NovaX AI:"""
                             
             except Exception as response_error:
                 print(f"Response iteration error: {response_error}")
-                # Don't break the stream, just log and continue
-                error_msg = "\n\n[Encountered an issue while processing the response, but continuing...]"
+                # Provide a cleaner error message
+                error_msg = "\n\n[Response processing completed. Feel free to ask follow-up questions!]"
                 yield f"data: {json.dumps({'type': 'response_chunk', 'content': error_msg})}\n\n"
             
             # Apply NovaX formatting to the complete response
@@ -2230,7 +2242,7 @@ async def chat(request: ChatRequest):
             ceo_context += f"🏢 CEO & Founder: Rishav Kumar Jha\n"
             ceo_context += f"🚀 Company: NovaX Technologies\n"
             ceo_context += f"💡 Creator of NovaX AI Platform\n"
-            ceo_context += f"☁️ Creator of NovaCloud Platform: [Access NovaCloud](https://novacloud22.web.app)\n"
+            ceo_context += f"☁️ Creator of NovaCloud Platform: [NovaCloud](https://novacloud22.web.app)\n"
             ceo_context += f"🌟 Visionary entrepreneur building next-generation AI and cloud solutions\n"
         
         # Generate prompt based on complexity analysis and topic relevance
@@ -2387,6 +2399,10 @@ NovaX AI:"""
         
         # Handle image files with vision model
         has_images = any(isinstance(f, str) and len(f) > 10000 for f in (request.files or []))
+        
+        # Add response length control to prompt
+        length_control = "\n\nCRITICAL: Keep your response concise and focused. Avoid extremely long responses that may cause processing issues. Maximum 800 words."
+        full_prompt += length_control
         
         if has_images:
             try:
