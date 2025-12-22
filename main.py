@@ -1,6 +1,6 @@
 from analytics_service import get_analytics_service
 from voice_service import get_voice_service
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from models import ChatRequest, ChatResponse, UserSettings, ShareRequest, SharedChat
@@ -1202,6 +1202,31 @@ async def get_user_shares(user_token: str):
         
         shares = await database.get_user_shared_chats(user_id)
         return {"shares": shares}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/share/private/list")
+async def get_private_shared_chats(authorization: str = Header(None)):
+    """Get chats shared privately with the current user"""
+    try:
+        user_id = "demo_user"
+        user_email = "demo@example.com"  # Default fallback
+        
+        if firebase_initialized and authorization:
+            try:
+                # Extract token from "Bearer <token>" format
+                token = authorization.replace("Bearer ", "") if authorization.startswith("Bearer ") else authorization
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+                user_email = decoded_token.get('email', f"user-{user_id[:8]}@novax.ai")
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                # Continue with demo user
+        
+        # Get private shares where this user is the recipient
+        private_shares = await database.get_private_shared_chats_for_user(user_email)
+        
+        return {"shares": private_shares}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
