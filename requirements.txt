@@ -13,9 +13,9 @@ google-auth-httplib2==0.1.1
 google-api-python-client==2.108.0
 Pillow
 huggingface-hub==0.19.4
-SpeechRecognition==3.10.0
-gTTS==2.4.0
-pygame==2.5.2
-pyaudio==0.2.11
-pandas==2.1.4
-numpy==1.24.3
+SpeechRecognition
+gTTS
+pygame
+pyaudio
+pandas
+numpy
