@@ -1738,27 +1738,16 @@ NovaX AI:"""
                             full_response += filtered_chunk
                             response_length += len(filtered_chunk)
                             
-                            # Send chunks in larger pieces for better performance with long responses
-                            if len(filtered_chunk) > 100:  # Large chunk, send in parts
-                                words = filtered_chunk.split(' ')
-                                word_groups = [words[i:i+5] for i in range(0, len(words), 5)]  # Group 5 words
-                                
-                                for word_group in word_groups:
-                                    if word_group:
-                                        try:
-                                            group_text = ' '.join(word_group) + ' '
-                                            yield f"data: {json.dumps({'type': 'response_chunk', 'content': group_text})}\n\n"
-                                            await asyncio.sleep(0.02)  # Faster for long responses
-                                        except Exception as chunk_error:
-                                            print(f"Word group error (skipping): {chunk_error}")
-                                            continue
-                            else:  # Small chunk, send as is
-                                try:
-                                    yield f"data: {json.dumps({'type': 'response_chunk', 'content': filtered_chunk})}\n\n"
-                                    await asyncio.sleep(0.03)
-                                except Exception as chunk_error:
-                                    print(f"Small chunk error (skipping): {chunk_error}")
-                                    continue
+                            # Send words individually for ChatGPT-like streaming
+                            words = filtered_chunk.split(' ')
+                            for word in words:
+                                if word.strip():
+                                    try:
+                                        yield f"data: {json.dumps({'type': 'response_chunk', 'content': word + ' '})}\n\n"
+                                        await asyncio.sleep(0.05)  # 50ms delay between words
+                                    except Exception as chunk_error:
+                                        print(f"Word streaming error (skipping): {chunk_error}")
+                                        continue
                                     
                         except Exception as filter_error:
                             print(f"Filtering error (skipping chunk): {filter_error}")
