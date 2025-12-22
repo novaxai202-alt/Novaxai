@@ -2019,7 +2019,77 @@ async def get_voice_languages():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/chat", response_model=ChatResponse)
+# Collaboration API endpoints
+@app.post("/api/workspace/create")
+async def create_workspace(request: dict):
+    try:
+        token = request.get("token")
+        name = request.get("name")
+        description = request.get("description", "")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        workspace_id = await database.create_workspace(user_id, name, description)
+        return {"success": True, "workspace_id": workspace_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workspaces/{user_token}")
+async def get_workspaces(user_token: str):
+    try:
+        user_id = "demo_user"
+        if firebase_initialized and user_token:
+            try:
+                decoded_token = auth.verify_id_token(user_token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        workspaces = await database.get_user_workspaces(user_id)
+        return {"workspaces": workspaces}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/chat/{chat_id}/export")
+async def export_chat(chat_id: str, request: dict):
+    try:
+        token = request.get("token")
+        format_type = request.get("format", "markdown")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        if format_type == "pdf":
+            content = await database.export_chat_pdf(chat_id, user_id)
+            from fastapi.responses import Response
+            return Response(
+                content=content,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f"attachment; filename=novax-chat-{chat_id}.txt"}
+            )
+        else:
+            content = await database.export_chat_markdown(chat_id, user_id)
+            from fastapi.responses import Response
+            return Response(
+                content=content,
+                media_type="text/markdown",
+                headers={"Content-Disposition": f"attachment; filename=novax-chat-{chat_id}.md"}
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 async def chat(request: ChatRequest):
     try:
         # Verify Firebase token only if Firebase is initialized
