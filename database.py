@@ -432,5 +432,62 @@ class DatabaseManager:
             print(f"Error revoking shared chat: {e}")
             return False
 
+    # Collaboration and Workspace Management
+    async def create_workspace(self, owner_id: str, name: str, description: str = "") -> str:
+        """Create a collaborative workspace"""
+        workspace_id = str(uuid.uuid4())
+        workspace_data = {
+            "id": workspace_id,
+            "name": name,
+            "description": description,
+            "owner_id": owner_id,
+            "created_at": datetime.now(),
+            "updated_at": datetime.now(),
+            "members": [owner_id],
+            "settings": {
+                "allow_public_join": False,
+                "require_approval": True,
+                "max_members": 50
+            }
+        }
+        db = self.get_db()
+        if db:
+            db.collection("workspaces").document(workspace_id).set(workspace_data)
+        return workspace_id
+    
+    async def get_user_workspaces(self, user_id: str) -> List[dict]:
+        """Get workspaces where user is a member"""
+        db = self.get_db()
+        if not db:
+            return []
+        try:
+            workspaces = db.collection("workspaces").where(filter=firestore.ArrayContains("members", user_id)).stream()
+            return [ws.to_dict() for ws in workspaces]
+        except Exception as e:
+            print(f"Error getting workspaces: {e}")
+            return []
+    
+    async def export_chat_pdf(self, chat_id: str, user_id: str) -> bytes:
+        """Export chat as PDF"""
+        messages = await self.get_chat_messages(chat_id)
+        content = f"NovaX AI Chat Export\n\nChat ID: {chat_id}\nExported by: {user_id}\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        
+        for msg in messages:
+            content += f"User: {msg.get('message', '')}\n\n"
+            content += f"AI: {msg.get('response', '')}\n\n---\n\n"
+        
+        return content.encode('utf-8')
+    
+    async def export_chat_markdown(self, chat_id: str, user_id: str) -> str:
+        """Export chat as Markdown"""
+        messages = await self.get_chat_messages(chat_id)
+        content = f"# NovaX AI Chat Export\n\n**Chat ID:** {chat_id}  \n**Exported by:** {user_id}  \n**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n---\n\n"
+        
+        for msg in messages:
+            content += f"## 👤 User\n{msg.get('message', '')}\n\n"
+            content += f"## 🤖 NovaX AI\n{msg.get('response', '')}\n\n---\n\n"
+        
+        return content
+
 # Global database instance
 database = DatabaseManager()
