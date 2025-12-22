@@ -415,6 +415,49 @@ class DatabaseManager:
             print(f"Error getting user shared chats: {e}")
             return []
     
+    async def get_private_shared_chats_for_user(self, user_email: str) -> List[dict]:
+        """Get chats shared privately with a specific user"""
+        db = self.get_db()
+        if not db:
+            return []
+        
+        try:
+            # Get private shares where this user is the recipient
+            shares = db.collection("shared_chats").where(
+                filter=firestore.FieldFilter("share_type", "==", "private")
+            ).where(
+                filter=firestore.FieldFilter("recipient_email", "==", user_email)
+            ).where(
+                filter=firestore.FieldFilter("is_active", "==", True)
+            ).stream()
+            
+            share_list = []
+            for share in shares:
+                share_data = share.to_dict()
+                
+                # Check if not expired
+                expires_at = share_data.get("expires_at")
+                if not expires_at or expires_at > datetime.now(expires_at.tzinfo if hasattr(expires_at, 'tzinfo') else None):
+                    # Get chat title and owner info
+                    chat_id = share_data.get("chat_id")
+                    if chat_id:
+                        chat_doc = db.collection("chat_sessions").document(chat_id).get()
+                        if chat_doc.exists:
+                            chat_data = chat_doc.to_dict()
+                            share_data["chat_title"] = chat_data.get("title", "Untitled Chat")
+                        
+                        # Get owner email (simplified - in production you'd get from user profile)
+                        owner_id = share_data.get("owner_id")
+                        share_data["owner_email"] = f"user-{owner_id[:8]}@novax.ai"  # Placeholder
+                    
+                    share_list.append(share_data)
+            
+            share_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+            return share_list
+        except Exception as e:
+            print(f"Error getting private shared chats: {e}")
+            return []
+
     async def revoke_shared_chat(self, share_id: str, user_id: str) -> bool:
         """Revoke a shared chat link"""
         db = self.get_db()
