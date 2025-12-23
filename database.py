@@ -3,6 +3,7 @@ from firebase_admin import firestore
 from models import ChatMessage, ChatSession, UserSettings
 from typing import List, Optional
 import uuid
+import re
 from datetime import datetime, timedelta, timezone
 
 class DatabaseManager:
@@ -185,6 +186,44 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error saving user memory: {e}")
     
+    # 2FA Management
+    async def save_2fa_secret(self, user_id: str, secret: str):
+        db = self.get_db()
+        if db:
+            db.collection("user_settings").document(user_id).update({
+                "totp_secret": secret,
+                "two_factor_enabled": False
+            })
+    
+    async def enable_2fa(self, user_id: str):
+        db = self.get_db()
+        if db:
+            db.collection("user_settings").document(user_id).update({
+                "two_factor_enabled": True
+            })
+    
+    async def disable_2fa(self, user_id: str):
+        db = self.get_db()
+        if db:
+            db.collection("user_settings").document(user_id).update({
+                "two_factor_enabled": False,
+                "totp_secret": None
+            })
+    
+    async def get_2fa_status(self, user_id: str) -> dict:
+        db = self.get_db()
+        if not db:
+            return {"enabled": False, "secret": None}
+        
+        doc = db.collection("user_settings").document(user_id).get()
+        if doc.exists:
+            data = doc.to_dict()
+            return {
+                "enabled": data.get("two_factor_enabled", False),
+                "secret": data.get("totp_secret")
+            }
+        return {"enabled": False, "secret": None}
+    
     async def get_user_memory(self, user_id: str) -> dict:
         db = self.get_db()
         if not db:
@@ -224,21 +263,13 @@ class DatabaseManager:
                 return
             
             if "my name is" in message_lower:
-                name = message_lower.split("my name is")[1].split()[0].strip(".,!?")
-                if name and len(name) > 1:
-                    current_memory["name"] = name.title()
-            
-            if any(pattern in message_lower for pattern in ["i work as", "i'm a", "i am a", "my job is"]):
-                for pattern in ["i work as", "i'm a", "i am a", "my job is"]:
-                    if pattern in message_lower:
-                        occupation = message_lower.split(pattern)[1].split()[0].strip(".,!?")
-                        if occupation and len(occupation) > 2:
-                            current_memory["occupation"] = occupation.title()
-            
-            await self.save_user_memory(user_id, current_memory)
-            
+                name_match = re.search(r"my name is ([^.!?\n]+)", message_lower)
+                if name_match:
+                    current_memory["name"] = name_match.group(1).strip().title()
+                    await self.save_user_memory(user_id, current_memory)
+                
         except Exception as e:
-            print(f"Memory Engine error: {e}")
+            print(f"Error updating user memory: {e}")
     
     async def get_user_context_for_ai(self, user_id: str) -> str:
         memory = await self.get_user_memory(user_id)
@@ -282,115 +313,7 @@ class DatabaseManager:
         
         return context
     
-    # Share functionality
-    async def create_shared_chat(self, chat_id: str, owner_id: str, share_type: str = "public", recipient_email: str = None, expires_in_days: int = 7) -> str:
-        share_id = str(uuid.uuid4())
-        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days) if expires_in_days else None
-        
-        share_data = {
-            "id": share_id,
-            "chat_id": chat_id,
-            "owner_id": owner_id,
-            "share_type": share_type,
-            "recipient_email": recipient_email,
-            "share_url": f"/shared/{share_id}",
-            "created_at": datetime.now(),
-            "expires_at": expires_at,
-            "is_active": True
-        }
-        
-        db = self.get_db()
-        if db:
-            db.collection("shared_chats").document(share_id).set(share_data)
-        
-        return share_id
-    
-    async def get_shared_chat(self, share_id: str) -> dict:
-        db = self.get_db()
-        if not db:
-            return None
-        
-        try:
-            doc = db.collection("shared_chats").document(share_id).get()
-            if doc.exists:
-                share_data = doc.to_dict()
-                if share_data.get("is_active", True):
-                    expires_at = share_data.get("expires_at")
-                    if not expires_at or expires_at > datetime.now(expires_at.tzinfo if hasattr(expires_at, 'tzinfo') else None):
-                        return share_data
-            return None
-        except Exception as e:
-            print(f"Error getting shared chat: {e}")
-            return None
-    
-    async def get_user_shared_chats(self, user_id: str) -> List[dict]:
-        db = self.get_db()
-        if not db:
-            return []
-        
-        try:
-            shares = db.collection("shared_chats").where(filter=firestore.FieldFilter("owner_id", "==", user_id)).stream()
-            share_list = [share.to_dict() for share in shares]
-            share_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
-            return share_list
-        except Exception as e:
-            print(f"Error getting user shared chats: {e}")
-            return []
-    
-    async def get_private_shared_chats_for_user(self, user_email: str) -> List[dict]:
-        db = self.get_db()
-        if not db:
-            return []
-        
-        try:
-            shares = db.collection("shared_chats").where(
-                filter=firestore.FieldFilter("share_type", "==", "private")
-            ).where(
-                filter=firestore.FieldFilter("recipient_email", "==", user_email)
-            ).where(
-                filter=firestore.FieldFilter("is_active", "==", True)
-            ).stream()
-            
-            share_list = []
-            for share in shares:
-                share_data = share.to_dict()
-                
-                expires_at = share_data.get("expires_at")
-                if not expires_at or expires_at > datetime.now(expires_at.tzinfo if hasattr(expires_at, 'tzinfo') else None):
-                    chat_id = share_data.get("chat_id")
-                    if chat_id:
-                        chat_doc = db.collection("chat_sessions").document(chat_id).get()
-                        if chat_doc.exists:
-                            chat_data = chat_doc.to_dict()
-                            share_data["chat_title"] = chat_data.get("title", "Untitled Chat")
-                        
-                        owner_id = share_data.get("owner_id")
-                        share_data["owner_email"] = f"user-{owner_id[:8]}@novax.ai"
-                    
-                    share_list.append(share_data)
-            
-            share_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
-            return share_list
-        except Exception as e:
-            print(f"Error getting private shared chats: {e}")
-            return []
-
-    async def revoke_shared_chat(self, share_id: str, user_id: str) -> bool:
-        db = self.get_db()
-        if not db:
-            return False
-        
-        try:
-            doc = db.collection("shared_chats").document(share_id).get()
-            if doc.exists and doc.to_dict().get("owner_id") == user_id:
-                db.collection("shared_chats").document(share_id).update({"is_active": False})
-                return True
-            return False
-        except Exception as e:
-            print(f"Error revoking shared chat: {e}")
-            return False
-
-    # Workspace Management
+    # Team Workspaces
     async def create_workspace(self, owner_id: str, name: str, description: str = "") -> str:
         workspace_id = str(uuid.uuid4())
         workspace_data = {
@@ -400,16 +323,12 @@ class DatabaseManager:
             "owner_id": owner_id,
             "created_at": datetime.now(),
             "updated_at": datetime.now(),
-            "members": [owner_id],
-            "settings": {
-                "allow_public_join": False,
-                "require_approval": True,
-                "max_members": 50
-            }
+            "is_active": True
         }
         db = self.get_db()
         if db:
             db.collection("workspaces").document(workspace_id).set(workspace_data)
+            await self.add_workspace_member(workspace_id, owner_id, "admin")
         return workspace_id
     
     async def get_user_workspaces(self, user_id: str) -> List[dict]:
@@ -417,44 +336,51 @@ class DatabaseManager:
         if not db:
             return []
         try:
-            workspaces = db.collection("workspaces").where("members", "array_contains", user_id).stream()
-            return [ws.to_dict() for ws in workspaces]
+            members = db.collection("workspace_members").where(filter=firestore.FieldFilter("user_id", "==", user_id)).stream()
+            workspace_ids = [member.to_dict()["workspace_id"] for member in members]
+            
+            workspaces = []
+            for workspace_id in workspace_ids:
+                workspace_doc = db.collection("workspaces").document(workspace_id).get()
+                if workspace_doc.exists:
+                    workspace_data = workspace_doc.to_dict()
+                    member_count = len(list(db.collection("workspace_members").where(filter=firestore.FieldFilter("workspace_id", "==", workspace_id)).stream()))
+                    workspace_data["member_count"] = member_count
+                    workspaces.append(workspace_data)
+            
+            return sorted(workspaces, key=lambda x: x.get('updated_at', datetime.min), reverse=True)
         except Exception as e:
-            print(f"Error getting workspaces: {e}")
+            print(f"Error getting user workspaces: {e}")
             return []
     
-    async def add_workspace_member(self, workspace_id: str, user_email: str) -> bool:
+    async def add_workspace_member(self, workspace_id: str, user_email: str, role: str = "member") -> bool:
         db = self.get_db()
         if not db:
             return False
         try:
-            users = db.collection("users").where(filter=firestore.FieldFilter("email", "==", user_email)).stream()
-            user_exists = any(users)
-            
-            if user_exists:
-                workspace_ref = db.collection("workspaces").document(workspace_id)
-                workspace_ref.update({
-                    "members": firestore.ArrayUnion([user_email])
-                })
-                return True
-            return False
+            member_data = {
+                "workspace_id": workspace_id,
+                "user_email": user_email,
+                "role": role,
+                "joined_at": datetime.now(),
+                "is_active": True
+            }
+            member_id = f"{workspace_id}_{user_email}"
+            db.collection("workspace_members").document(member_id).set(member_data)
+            return True
         except Exception as e:
             print(f"Error adding workspace member: {e}")
             return False
     
-    async def get_workspace_messages(self, workspace_id: str) -> List[dict]:
+    async def get_workspace_members(self, workspace_id: str) -> List[dict]:
         db = self.get_db()
         if not db:
             return []
         try:
-            messages = db.collection("workspace_messages").where(
-                filter=firestore.FieldFilter("workspace_id", "==", workspace_id)
-            ).stream()
-            message_list = [msg.to_dict() for msg in messages]
-            message_list.sort(key=lambda x: x.get('timestamp', datetime.min))
-            return message_list
+            members = db.collection("workspace_members").where(filter=firestore.FieldFilter("workspace_id", "==", workspace_id)).stream()
+            return [member.to_dict() for member in members]
         except Exception as e:
-            print(f"Error getting workspace messages: {e}")
+            print(f"Error getting workspace members: {e}")
             return []
     
     async def save_workspace_message(self, workspace_id: str, user_id: str, message: str, response: str) -> str:
@@ -465,99 +391,148 @@ class DatabaseManager:
             "user_id": user_id,
             "message": message,
             "response": response,
-            "timestamp": datetime.now()
+            "timestamp": datetime.now(),
+            "message_type": "collaborative"
         }
         db = self.get_db()
         if db:
             db.collection("workspace_messages").document(message_id).set(message_data)
         return message_id
     
-    async def update_member_role(self, workspace_id: str, user_email: str, role: str) -> bool:
-        db = self.get_db()
-        if not db:
-            return False
-        try:
-            workspace_ref = db.collection("workspaces").document(workspace_id)
-            workspace_ref.update({
-                f"member_roles.{user_email}": role
-            })
-            return True
-        except Exception as e:
-            print(f"Error updating member role: {e}")
-            return False
-    
-    async def get_workspace_members(self, workspace_id: str) -> List[dict]:
+    async def get_workspace_messages(self, workspace_id: str) -> List[dict]:
         db = self.get_db()
         if not db:
             return []
         try:
-            doc = db.collection("workspaces").document(workspace_id).get()
+            messages = db.collection("workspace_messages").where(filter=firestore.FieldFilter("workspace_id", "==", workspace_id)).stream()
+            message_list = [message.to_dict() for message in messages]
+            return sorted(message_list, key=lambda x: x.get('timestamp', datetime.min))
+        except Exception as e:
+            print(f"Error getting workspace messages: {e}")
+            return []
+    
+    # Chat Sharing
+    async def create_shared_chat(self, chat_id: str, owner_id: str, share_type: str = "public", recipient_email: str = None, expires_in_days: int = 7) -> str:
+        share_id = str(uuid.uuid4())
+        expires_at = datetime.now() + timedelta(days=expires_in_days) if expires_in_days else None
+        
+        share_data = {
+            "id": share_id,
+            "chat_id": chat_id,
+            "owner_id": owner_id,
+            "share_type": share_type,
+            "recipient_email": recipient_email,
+            "share_url": f"/shared/{share_id}",
+            "created_at": datetime.now(),
+            "expires_at": expires_at,
+            "is_active": True,
+            "view_count": 0
+        }
+        
+        db = self.get_db()
+        if db:
+            db.collection("shared_chats").document(share_id).set(share_data)
+        return share_id
+    
+    async def get_shared_chat(self, share_id: str) -> dict:
+        db = self.get_db()
+        if not db:
+            return None
+        try:
+            doc = db.collection("shared_chats").document(share_id).get()
             if doc.exists:
-                data = doc.to_dict()
-                members = []
-                for email in data.get("members", []):
-                    role = data.get("member_roles", {}).get(email, "member")
-                    members.append({"email": email, "role": role})
-                return members
-            return []
+                share_data = doc.to_dict()
+                if share_data.get("expires_at") and share_data["expires_at"] < datetime.now():
+                    return None
+                db.collection("shared_chats").document(share_id).update({"view_count": firestore.Increment(1)})
+                return share_data
+            return None
         except Exception as e:
-            print(f"Error getting workspace members: {e}")
-            return []
+            print(f"Error getting shared chat: {e}")
+            return None
     
-    async def check_user_exists(self, email: str) -> bool:
-        try:
-            # Check Firebase Auth first
-            from firebase_admin import auth
-            try:
-                user = auth.get_user_by_email(email)
-                return True
-            except auth.UserNotFoundError:
-                # Fallback to Firestore users collection
-                db = self.get_db()
-                if db:
-                    users = db.collection("users").where(filter=firestore.FieldFilter("email", "==", email)).stream()
-                    return any(users)
-                return False
-        except Exception as e:
-            print(f"Error checking user existence: {e}")
-            return False
-    
-    async def get_workspace_with_members(self, workspace_id: str) -> dict:
+    async def get_user_shared_chats(self, user_id: str) -> List[dict]:
         db = self.get_db()
         if not db:
-            return {}
+            return []
         try:
-            doc = db.collection("workspaces").document(workspace_id).get()
-            if doc.exists:
-                workspace = doc.to_dict()
-                members = await self.get_workspace_members(workspace_id)
-                workspace["member_details"] = members
-                return workspace
-            return {}
+            shares = db.collection("shared_chats").where(filter=firestore.FieldFilter("owner_id", "==", user_id)).stream()
+            share_list = []
+            for share in shares:
+                share_data = share.to_dict()
+                chat_doc = db.collection("chat_sessions").document(share_data["chat_id"]).get()
+                if chat_doc.exists:
+                    share_data["chat_title"] = chat_doc.to_dict().get("title", "Untitled Chat")
+                share_list.append(share_data)
+            return sorted(share_list, key=lambda x: x.get('created_at', datetime.min), reverse=True)
         except Exception as e:
-            print(f"Error getting workspace with members: {e}")
-            return {}
+            print(f"Error getting user shared chats: {e}")
+            return []
     
-    async def delete_workspace(self, workspace_id: str, user_id: str) -> bool:
+    async def revoke_shared_chat(self, share_id: str, user_id: str) -> bool:
         db = self.get_db()
         if not db:
             return False
         try:
-            doc = db.collection("workspaces").document(workspace_id).get()
+            doc = db.collection("shared_chats").document(share_id).get()
             if doc.exists and doc.to_dict().get("owner_id") == user_id:
-                # Delete workspace messages
-                messages = db.collection("workspace_messages").where("workspace_id", "==", workspace_id).stream()
-                for message in messages:
-                    message.reference.delete()
-                
-                # Delete workspace
-                db.collection("workspaces").document(workspace_id).delete()
+                db.collection("shared_chats").document(share_id).update({"is_active": False})
                 return True
             return False
         except Exception as e:
-            print(f"Error deleting workspace: {e}")
+            print(f"Error revoking shared chat: {e}")
             return False
     
+    async def get_private_shared_chats_for_user(self, user_email: str) -> List[dict]:
+        db = self.get_db()
+        if not db:
+            return []
+        try:
+            shares = db.collection("shared_chats").where(filter=firestore.FieldFilter("recipient_email", "==", user_email)).where(filter=firestore.FieldFilter("share_type", "==", "private")).stream()
+            share_list = []
+            for share in shares:
+                share_data = share.to_dict()
+                if share_data.get("expires_at") and share_data["expires_at"] < datetime.now():
+                    continue
+                chat_doc = db.collection("chat_sessions").document(share_data["chat_id"]).get()
+                if chat_doc.exists:
+                    share_data["chat_title"] = chat_doc.to_dict().get("title", "Untitled Chat")
+                share_list.append(share_data)
+            return sorted(share_list, key=lambda x: x.get('created_at', datetime.min), reverse=True)
+        except Exception as e:
+            print(f"Error getting private shared chats: {e}")
+            return []
+    
+    # Chat Export
+    async def export_chat_markdown(self, chat_id: str, user_id: str) -> str:
+        try:
+            db = self.get_db()
+            if not db:
+                return "# Chat Export\n\nError: Database unavailable"
+            
+            chat_doc = db.collection("chat_sessions").document(chat_id).get()
+            if not chat_doc.exists:
+                return "# Chat Export\n\nError: Chat not found"
+            
+            chat_data = chat_doc.to_dict()
+            messages = await self.get_chat_messages(chat_id)
+            
+            markdown = f"# {chat_data.get('title', 'NovaX AI Chat')}\n\n"
+            markdown += f"**Created:** {chat_data.get('created_at', 'Unknown').strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            markdown += "---\n\n"
+            
+            for msg in messages:
+                timestamp = msg.get('timestamp', datetime.now()).strftime('%H:%M:%S')
+                markdown += f"## [{timestamp}] User\n\n{msg.get('message', '')}\n\n"
+                markdown += f"## [{timestamp}] NovaX AI ({msg.get('agent_type', 'Assistant')})\n\n{msg.get('response', '')}\n\n---\n\n"
+            
+            markdown += "\n*Exported from NovaX AI Platform*"
+            return markdown
+        except Exception as e:
+            print(f"Error exporting chat: {e}")
+            return f"# Chat Export\n\nError: {str(e)}"
+    
+    # User Management
     async def create_user_profile(self, user_id: str, email: str, display_name: str = "") -> bool:
         db = self.get_db()
         if not db:
@@ -568,63 +543,96 @@ class DatabaseManager:
                 "email": email,
                 "display_name": display_name,
                 "created_at": datetime.now(),
-                "email_verified": False,
-                "profile_complete": False
+                "last_active": datetime.now(),
+                "is_active": True
             }
-            db.collection("users").document(user_id).set(user_data)
+            db.collection("user_profiles").document(user_id).set(user_data, merge=True)
             return True
         except Exception as e:
             print(f"Error creating user profile: {e}")
             return False
     
-    async def export_chat_pdf(self, chat_id: str, user_id: str) -> bytes:
-        messages = await self.get_chat_messages(chat_id)
-        content = f"NovaX AI Chat Export\n\nChat ID: {chat_id}\nExported by: {user_id}\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        
-        for msg in messages:
-            content += f"User: {msg.get('message', '')}\n\n"
-            content += f"AI: {msg.get('response', '')}\n\n---\n\n"
-        
-        return content.encode('utf-8')
-    
-    async def export_chat_markdown(self, chat_id: str, user_id: str) -> str:
-        messages = await self.get_chat_messages(chat_id)
-        content = f"# NovaX AI Chat Export\n\n**Chat ID:** {chat_id}  \n**Exported by:** {user_id}  \n**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n---\n\n"
-        
-        for msg in messages:
-            content += f"## 👤 User\n{msg.get('message', '')}\n\n"
-            content += f"## 🤖 NovaX AI\n{msg.get('response', '')}\n\n---\n\n"
-        
-        return content
-    
-    async def create_public_share(self, chat_id: str, owner_id: str, expires_in_days: int = 7) -> str:
-        share_id = str(uuid.uuid4())
-        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days) if expires_in_days else None
-        
-        share_data = {
-            "id": share_id,
-            "chat_id": chat_id,
-            "owner_id": owner_id,
-            "share_type": "public",
-            "share_url": f"/public/{share_id}",
-            "created_at": datetime.now(),
-            "expires_at": expires_at,
-            "is_active": True,
-            "allow_comments": False
-        }
-        
+    async def check_user_exists(self, email: str) -> bool:
         db = self.get_db()
-        if db:
-            db.collection("public_shares").document(share_id).set(share_data)
-        return share_id
+        if not db:
+            return False
+        try:
+            users = db.collection("user_profiles").where(filter=firestore.FieldFilter("email", "==", email)).limit(1).stream()
+            return len(list(users)) > 0
+        except Exception as e:
+            print(f"Error checking user exists: {e}")
+            return False
+    
+    async def delete_workspace(self, workspace_id: str, user_id: str) -> bool:
+        db = self.get_db()
+        if not db:
+            return False
+        try:
+            workspace_doc = db.collection("workspaces").document(workspace_id).get()
+            if workspace_doc.exists and workspace_doc.to_dict().get("owner_id") == user_id:
+                # Delete workspace messages
+                messages = db.collection("workspace_messages").where(filter=firestore.FieldFilter("workspace_id", "==", workspace_id)).stream()
+                for message in messages:
+                    message.reference.delete()
+                
+                # Delete workspace members
+                members = db.collection("workspace_members").where(filter=firestore.FieldFilter("workspace_id", "==", workspace_id)).stream()
+                for member in members:
+                    member.reference.delete()
+                
+                # Delete workspace
+                db.collection("workspaces").document(workspace_id).delete()
+                return True
+            return False
+        except Exception as e:
+            print(f"Error deleting workspace: {e}")
+            return False
+    
+    async def update_member_role(self, workspace_id: str, user_email: str, role: str) -> bool:
+        db = self.get_db()
+        if not db:
+            return False
+        try:
+            member_id = f"{workspace_id}_{user_email}"
+            db.collection("workspace_members").document(member_id).update({"role": role})
+            return True
+        except Exception as e:
+            print(f"Error updating member role: {e}")
+            return False
+    
+    async def get_workspace_with_members(self, workspace_id: str) -> dict:
+        db = self.get_db()
+        if not db:
+            return None
+        try:
+            workspace_doc = db.collection("workspaces").document(workspace_id).get()
+            if workspace_doc.exists:
+                workspace_data = workspace_doc.to_dict()
+                members = await self.get_workspace_members(workspace_id)
+                workspace_data["members"] = members
+                return workspace_data
+            return None
+        except Exception as e:
+            print(f"Error getting workspace with members: {e}")
+            return None
+    
+    async def create_public_share(self, chat_id: str, user_id: str, expires_in_days: int = 7) -> str:
+        return await self.create_shared_chat(chat_id, user_id, "public", None, expires_in_days)
     
     async def get_public_shares(self, user_id: str) -> List[dict]:
         db = self.get_db()
         if not db:
             return []
         try:
-            shares = db.collection("public_shares").where(filter=firestore.FieldFilter("owner_id", "==", user_id)).stream()
-            return [share.to_dict() for share in shares]
+            shares = db.collection("shared_chats").where(filter=firestore.FieldFilter("owner_id", "==", user_id)).where(filter=firestore.FieldFilter("share_type", "==", "public")).stream()
+            share_list = []
+            for share in shares:
+                share_data = share.to_dict()
+                chat_doc = db.collection("chat_sessions").document(share_data["chat_id"]).get()
+                if chat_doc.exists:
+                    share_data["chat_title"] = chat_doc.to_dict().get("title", "Untitled Chat")
+                share_list.append(share_data)
+            return sorted(share_list, key=lambda x: x.get('created_at', datetime.min), reverse=True)
         except Exception as e:
             print(f"Error getting public shares: {e}")
             return []
@@ -636,154 +644,12 @@ class DatabaseManager:
             "share_id": share_id,
             "user_id": user_id,
             "comment": comment,
-            "timestamp": datetime.now()
+            "created_at": datetime.now()
         }
         db = self.get_db()
         if db:
             db.collection("share_comments").document(comment_id).set(comment_data)
         return comment_id
-
-    # Productivity Tools - Task Management
-    async def save_todo(self, user_id: str, chat_id: str, todo_data: dict) -> str:
-        todo_id = str(uuid.uuid4())
-        todo_doc = {
-            "id": todo_id,
-            "user_id": user_id,
-            "chat_id": chat_id,
-            "title": todo_data.get("title", ""),
-            "description": todo_data.get("description", ""),
-            "priority": todo_data.get("priority", "medium"),
-            "status": todo_data.get("status", "pending"),
-            "source": todo_data.get("source", "conversation"),
-            "due_date": todo_data.get("due_date"),
-            "created_at": datetime.now(),
-            "updated_at": datetime.now()
-        }
-        
-        db = self.get_db()
-        if db:
-            db.collection("todos").document(todo_id).set(todo_doc)
-        return todo_id
-    
-    async def get_user_todos(self, user_id: str, status: str = "all") -> List[dict]:
-        db = self.get_db()
-        if not db:
-            return []
-        
-        try:
-            query = db.collection("todos").where(filter=firestore.FieldFilter("user_id", "==", user_id))
-            
-            if status != "all":
-                query = query.where(filter=firestore.FieldFilter("status", "==", status))
-            
-            todos = query.stream()
-            todo_list = [todo.to_dict() for todo in todos]
-            todo_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
-            return todo_list
-        except Exception as e:
-            print(f"Error getting todos: {e}")
-            return []
-    
-    async def update_todo(self, user_id: str, todo_id: str, updates: dict) -> bool:
-        db = self.get_db()
-        if not db:
-            return False
-        
-        try:
-            todo_ref = db.collection("todos").document(todo_id)
-            todo_doc = todo_ref.get()
-            
-            if todo_doc.exists and todo_doc.to_dict().get("user_id") == user_id:
-                updates["updated_at"] = datetime.now()
-                todo_ref.update(updates)
-                return True
-            return False
-        except Exception as e:
-            print(f"Error updating todo: {e}")
-            return False
-    
-    # Productivity Tools - Calendar Events
-    async def save_calendar_event(self, user_id: str, chat_id: str, event_data: dict) -> str:
-        event_id = str(uuid.uuid4())
-        event_doc = {
-            "id": event_id,
-            "user_id": user_id,
-            "chat_id": chat_id,
-            "title": event_data.get("title", ""),
-            "description": event_data.get("description", ""),
-            "start_time": event_data.get("start_time", ""),
-            "end_time": event_data.get("end_time", ""),
-            "duration": event_data.get("duration", "1 hour"),
-            "type": event_data.get("type", "meeting"),
-            "status": event_data.get("status", "suggested"),
-            "attendees": event_data.get("attendees", []),
-            "location": event_data.get("location", ""),
-            "created_at": datetime.now(),
-            "updated_at": datetime.now()
-        }
-        
-        db = self.get_db()
-        if db:
-            db.collection("calendar_events").document(event_id).set(event_doc)
-        return event_id
-    
-    async def get_user_calendar_events(self, user_id: str) -> List[dict]:
-        db = self.get_db()
-        if not db:
-            return []
-        
-        try:
-            events = db.collection("calendar_events").where(
-                filter=firestore.FieldFilter("user_id", "==", user_id)
-            ).stream()
-            
-            event_list = [event.to_dict() for event in events]
-            event_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
-            return event_list
-        except Exception as e:
-            print(f"Error getting calendar events: {e}")
-            return []
-    
-    # Productivity Tools - Notes
-    async def save_note(self, user_id: str, chat_id: str, note_data: dict) -> str:
-        note_id = str(uuid.uuid4())
-        note_doc = {
-            "id": note_id,
-            "user_id": user_id,
-            "chat_id": chat_id,
-            "title": note_data.get("title", ""),
-            "content": note_data.get("content", ""),
-            "key_points": note_data.get("key_points", []),
-            "category": note_data.get("category", "general"),
-            "tags": note_data.get("tags", []),
-            "is_favorite": note_data.get("is_favorite", False),
-            "created_at": datetime.now(),
-            "updated_at": datetime.now()
-        }
-        
-        db = self.get_db()
-        if db:
-            db.collection("notes").document(note_id).set(note_doc)
-        return note_id
-    
-    async def get_user_notes(self, user_id: str, category: str = "all") -> List[dict]:
-        db = self.get_db()
-        if not db:
-            return []
-        
-        try:
-            query = db.collection("notes").where(filter=firestore.FieldFilter("user_id", "==", user_id))
-            
-            if category != "all":
-                query = query.where(filter=firestore.FieldFilter("category", "==", category))
-            
-            notes = query.stream()
-            note_list = [note.to_dict() for note in notes]
-            note_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
-            return note_list
-        except Exception as e:
-            print(f"Error getting notes: {e}")
-            return []
 
 # Global database instance
 database = DatabaseManager()
