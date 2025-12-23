@@ -1,3 +1,7 @@
+import pyotp
+import qrcode
+import io
+import base64
 from analytics_service import get_analytics_service
 from voice_service import get_voice_service
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Header
@@ -2690,6 +2694,228 @@ async def get_workspace_details(workspace_id: str):
         return {"workspace": workspace}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+@app.post("/api/2fa/setup")
+async def setup_2fa(request: dict):
+    """Setup 2FA for user"""
+    try:
+        token = request.get("token")
+        user_id = "demo_user"
+        user_email = "demo@example.com"
+        
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+                user_email = decoded_token.get('email', f"user-{user_id[:8]}@novax.ai")
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        # Generate secret
+        secret = pyotp.random_base32()
+        
+        # Save secret to database
+        await database.save_2fa_secret(user_id, secret)
+        
+        # Generate QR code
+        totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
+            name=user_email,
+            issuer_name="NovaX AI"
+        )
+        
+        # Create QR code image
+        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+        qr.add_data(totp_uri)
+        qr.make(fit=True)
+        
+        img = qr.make_image(fill_color="black", back_color="white")
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        qr_code_data = base64.b64encode(buffer.getvalue()).decode()
+        
+        return {
+            "success": True,
+            "secret": secret,
+            "qr_code": qr_code_data,
+            "manual_entry_key": secret
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/2fa/verify")
+async def verify_2fa(request: dict):
+    """Verify 2FA code"""
+    try:
+        token = request.get("token")
+        code = request.get("code")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        # Get user's 2FA status
+        fa_status = await database.get_2fa_status(user_id)
+        secret = fa_status.get('secret')
+        
+        if not secret:
+            raise HTTPException(status_code=400, detail="2FA not set up")
+        
+        # Verify code
+        totp = pyotp.TOTP(secret)
+        is_valid = totp.verify(code, valid_window=1)
+        
+        return {
+            "success": True,
+            "valid": is_valid
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/2fa/enable")
+async def enable_2fa(request: dict):
+    """Enable 2FA after verification"""
+    try:
+        token = request.get("token")
+        code = request.get("code")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        # Get user's 2FA status
+        fa_status = await database.get_2fa_status(user_id)
+        secret = fa_status.get('secret')
+        
+        if not secret:
+            raise HTTPException(status_code=400, detail="2FA not set up")
+        
+        # Verify code first
+        totp = pyotp.TOTP(secret)
+        is_valid = totp.verify(code, valid_window=1)
+        
+        if not is_valid:
+            raise HTTPException(status_code=400, detail="Invalid 2FA code")
+        
+        # Enable 2FA
+        await database.enable_2fa(user_id)
+        
+        return {
+            "success": True,
+            "message": "2FA enabled successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/2fa/disable")
+async def disable_2fa(request: dict):
+    """Disable 2FA"""
+    try:
+        token = request.get("token")
+        code = request.get("code")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        # Get user's 2FA status
+        fa_status = await database.get_2fa_status(user_id)
+        secret = fa_status.get('secret')
+        
+        if not secret:
+            raise HTTPException(status_code=400, detail="2FA not enabled")
+        
+        # Verify code first
+        totp = pyotp.TOTP(secret)
+        is_valid = totp.verify(code, valid_window=1)
+        
+        if not is_valid:
+            raise HTTPException(status_code=400, detail="Invalid 2FA code")
+        
+        # Disable 2FA
+        await database.disable_2fa(user_id)
+        
+        return {
+            "success": True,
+            "message": "2FA disabled successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/2fa/status/{user_token}")
+async def get_2fa_status(user_token: str):
+    """Get 2FA status for user"""
+    try:
+        user_id = "demo_user"
+        if firebase_initialized and user_token:
+            try:
+                decoded_token = auth.verify_id_token(user_token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                user_id = "demo_user"
+        
+        fa_status = await database.get_2fa_status(user_id)
+        
+        return {
+            "enabled": fa_status.get('enabled', False),
+            "has_secret": bool(fa_status.get('secret'))
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/verify-2fa")
+async def verify_login_2fa(request: dict):
+    """Verify 2FA during login"""
+    try:
+        token = request.get("token")
+        code = request.get("code")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception as token_error:
+                print(f"Token validation failed: {token_error}")
+                raise HTTPException(status_code=401, detail="Invalid token")
+        
+        # Get user's 2FA status
+        fa_status = await database.get_2fa_status(user_id)
+        
+        if not fa_status.get('enabled', False):
+            return {"success": True, "requires_2fa": False}
+        
+        secret = fa_status.get('secret')
+        if not secret:
+            raise HTTPException(status_code=400, detail="2FA configuration error")
+        
+        # Verify code
+        totp = pyotp.TOTP(secret)
+        is_valid = totp.verify(code, valid_window=1)
+        
+        return {
+            "success": True,
+            "valid": is_valid,
+            "requires_2fa": True
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/user/create")
 async def create_user_profile(request: dict):
     try:
