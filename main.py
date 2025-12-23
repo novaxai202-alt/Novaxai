@@ -2520,6 +2520,24 @@ if __name__ == "__main__":
     import uvicorn
     start_cleanup_task()  # Start cache cleanup
     uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.delete("/api/workspace/{workspace_id}")
+async def delete_workspace(workspace_id: str, request: dict):
+    try:
+        token = request.get("token")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        success = await database.delete_workspace(workspace_id, user_id)
+        return {"success": success}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/workspace/invite")
 async def invite_to_workspace(request: dict):
     try:
