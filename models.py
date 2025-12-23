@@ -85,3 +85,17 @@ class SharedChat(BaseModel):
     created_at: datetime
     expires_at: Optional[datetime] = None
     is_active: bool = True
+class WorkspaceRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    token: str
+
+class WorkspaceInviteRequest(BaseModel):
+    workspace_id: str
+    email: str
+    token: str
+
+class WorkspaceChatMessage(BaseModel):
+    workspace_id: str
+    message: str
+    token: str
