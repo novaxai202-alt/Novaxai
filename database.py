@@ -505,12 +505,19 @@ class DatabaseManager:
             return []
     
     async def check_user_exists(self, email: str) -> bool:
-        db = self.get_db()
-        if not db:
-            return False
         try:
-            users = db.collection("users").where(filter=firestore.FieldFilter("email", "==", email)).stream()
-            return any(users)
+            # Check Firebase Auth first
+            from firebase_admin import auth
+            try:
+                user = auth.get_user_by_email(email)
+                return True
+            except auth.UserNotFoundError:
+                # Fallback to Firestore users collection
+                db = self.get_db()
+                if db:
+                    users = db.collection("users").where(filter=firestore.FieldFilter("email", "==", email)).stream()
+                    return any(users)
+                return False
         except Exception as e:
             print(f"Error checking user existence: {e}")
             return False
@@ -530,6 +537,26 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error getting workspace with members: {e}")
             return {}
+    
+    async def delete_workspace(self, workspace_id: str, user_id: str) -> bool:
+        db = self.get_db()
+        if not db:
+            return False
+        try:
+            doc = db.collection("workspaces").document(workspace_id).get()
+            if doc.exists and doc.to_dict().get("owner_id") == user_id:
+                # Delete workspace messages
+                messages = db.collection("workspace_messages").where("workspace_id", "==", workspace_id).stream()
+                for message in messages:
+                    message.reference.delete()
+                
+                # Delete workspace
+                db.collection("workspaces").document(workspace_id).delete()
+                return True
+            return False
+        except Exception as e:
+            print(f"Error deleting workspace: {e}")
+            return False
     
     async def create_user_profile(self, user_id: str, email: str, display_name: str = "") -> bool:
         db = self.get_db()
