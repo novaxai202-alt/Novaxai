@@ -585,6 +585,7 @@ class DatabaseManager:
         if db:
             db.collection("workspace_messages").document(message_id).set(message_data)
         return message_id
+    
     async def update_member_role(self, workspace_id: str, user_email: str, role: str) -> bool:
         """Update member role in workspace"""
         db = self.get_db()
@@ -618,6 +619,7 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error getting workspace members: {e}")
             return []
+    
     async def create_public_share(self, chat_id: str, owner_id: str, expires_in_days: int = 7) -> str:
         """Create public share link"""
         share_id = str(uuid.uuid4())
@@ -666,6 +668,7 @@ class DatabaseManager:
         if db:
             db.collection("share_comments").document(comment_id).set(comment_data)
         return comment_id
+    
     async def check_user_exists(self, email: str) -> bool:
         """Check if user exists in NovaX AI system"""
         db = self.get_db()
@@ -694,6 +697,7 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error getting workspace with members: {e}")
             return {}
+    
     async def create_user_profile(self, user_id: str, email: str, display_name: str = "") -> bool:
         """Create user profile in database"""
         db = self.get_db()
@@ -713,3 +717,6 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error creating user profile: {e}")
             return False
+
+# Global database instance
+database = DatabaseManager()
