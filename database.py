@@ -323,12 +323,16 @@ class DatabaseManager:
             "owner_id": owner_id,
             "created_at": datetime.now(),
             "updated_at": datetime.now(),
-            "is_active": True
+            "is_active": True,
+            "members": [{
+                "user_id": owner_id,
+                "role": "owner",
+                "joined_at": datetime.now()
+            }]
         }
         db = self.get_db()
         if db:
             db.collection("workspaces").document(workspace_id).set(workspace_data)
-            await self.add_workspace_member(workspace_id, owner_id, "admin")
         return workspace_id
     
     async def get_user_workspaces(self, user_id: str) -> List[dict]:
@@ -336,19 +340,17 @@ class DatabaseManager:
         if not db:
             return []
         try:
-            members = db.collection("workspace_members").where(filter=firestore.FieldFilter("user_id", "==", user_id)).stream()
-            workspace_ids = [member.to_dict()["workspace_id"] for member in members]
-            
-            workspaces = []
-            for workspace_id in workspace_ids:
-                workspace_doc = db.collection("workspaces").document(workspace_id).get()
-                if workspace_doc.exists:
-                    workspace_data = workspace_doc.to_dict()
-                    member_count = len(list(db.collection("workspace_members").where(filter=firestore.FieldFilter("workspace_id", "==", workspace_id)).stream()))
-                    workspace_data["member_count"] = member_count
-                    workspaces.append(workspace_data)
-            
-            return sorted(workspaces, key=lambda x: x.get('updated_at', datetime.min), reverse=True)
+            workspaces = db.collection("workspaces").stream()
+            workspace_list = []
+            for workspace in workspaces:
+                data = workspace.to_dict()
+                members = data.get("members", [])
+                # Check if user is a member
+                is_member = any(m.get("user_id") == user_id for m in members)
+                if is_member:
+                    data["member_count"] = len(members)
+                    workspace_list.append(data)
+            return sorted(workspace_list, key=lambda x: x.get('updated_at', datetime.min), reverse=True)
         except Exception as e:
             print(f"Error getting user workspaces: {e}")
             return []
@@ -358,15 +360,31 @@ class DatabaseManager:
         if not db:
             return False
         try:
-            member_data = {
-                "workspace_id": workspace_id,
-                "user_email": user_email,
+            workspace_doc = db.collection("workspaces").document(workspace_id).get()
+            if not workspace_doc.exists:
+                return False
+            
+            workspace_data = workspace_doc.to_dict()
+            members = workspace_data.get("members", [])
+            
+            # Check if user already exists
+            for member in members:
+                if member.get("email") == user_email:
+                    return False
+            
+            # Add new member
+            new_member = {
+                "email": user_email,
                 "role": role,
-                "joined_at": datetime.now(),
-                "is_active": True
+                "status": "invited",
+                "invited_at": datetime.now()
             }
-            member_id = f"{workspace_id}_{user_email}"
-            db.collection("workspace_members").document(member_id).set(member_data)
+            
+            members.append(new_member)
+            db.collection("workspaces").document(workspace_id).update({
+                "members": members,
+                "updated_at": datetime.now()
+            })
             return True
         except Exception as e:
             print(f"Error adding workspace member: {e}")
@@ -377,8 +395,11 @@ class DatabaseManager:
         if not db:
             return []
         try:
-            members = db.collection("workspace_members").where(filter=firestore.FieldFilter("workspace_id", "==", workspace_id)).stream()
-            return [member.to_dict() for member in members]
+            workspace_doc = db.collection("workspaces").document(workspace_id).get()
+            if workspace_doc.exists:
+                workspace_data = workspace_doc.to_dict()
+                return workspace_data.get("members", [])
+            return []
         except Exception as e:
             print(f"Error getting workspace members: {e}")
             return []
