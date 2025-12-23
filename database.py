@@ -532,5 +532,184 @@ class DatabaseManager:
         
         return content
 
-# Global database instance
-database = DatabaseManager()
+    async def add_workspace_member(self, workspace_id: str, user_email: str) -> bool:
+        """Add member to workspace by email"""
+        db = self.get_db()
+        if not db:
+            return False
+        try:
+            # Check if user exists in system
+            users = db.collection("users").where(filter=firestore.FieldFilter("email", "==", user_email)).stream()
+            user_exists = any(users)
+            
+            if user_exists:
+                # Add to workspace members
+                workspace_ref = db.collection("workspaces").document(workspace_id)
+                workspace_ref.update({
+                    "members": firestore.ArrayUnion([user_email])
+                })
+                return True
+            return False
+        except Exception as e:
+            print(f"Error adding workspace member: {e}")
+            return False
+    
+    async def get_workspace_messages(self, workspace_id: str) -> List[dict]:
+        """Get all messages in a workspace"""
+        db = self.get_db()
+        if not db:
+            return []
+        try:
+            messages = db.collection("workspace_messages").where(
+                filter=firestore.FieldFilter("workspace_id", "==", workspace_id)
+            ).stream()
+            message_list = [msg.to_dict() for msg in messages]
+            message_list.sort(key=lambda x: x.get('timestamp', datetime.min))
+            return message_list
+        except Exception as e:
+            print(f"Error getting workspace messages: {e}")
+            return []
+    
+    async def save_workspace_message(self, workspace_id: str, user_id: str, message: str, response: str) -> str:
+        """Save message in workspace"""
+        message_id = str(uuid.uuid4())
+        message_data = {
+            "id": message_id,
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "message": message,
+            "response": response,
+            "timestamp": datetime.now()
+        }
+        db = self.get_db()
+        if db:
+            db.collection("workspace_messages").document(message_id).set(message_data)
+        return message_id
+    async def update_member_role(self, workspace_id: str, user_email: str, role: str) -> bool:
+        """Update member role in workspace"""
+        db = self.get_db()
+        if not db:
+            return False
+        try:
+            workspace_ref = db.collection("workspaces").document(workspace_id)
+            workspace_ref.update({
+                f"member_roles.{user_email}": role
+            })
+            return True
+        except Exception as e:
+            print(f"Error updating member role: {e}")
+            return False
+    
+    async def get_workspace_members(self, workspace_id: str) -> List[dict]:
+        """Get workspace members with roles"""
+        db = self.get_db()
+        if not db:
+            return []
+        try:
+            doc = db.collection("workspaces").document(workspace_id).get()
+            if doc.exists:
+                data = doc.to_dict()
+                members = []
+                for email in data.get("members", []):
+                    role = data.get("member_roles", {}).get(email, "member")
+                    members.append({"email": email, "role": role})
+                return members
+            return []
+        except Exception as e:
+            print(f"Error getting workspace members: {e}")
+            return []
+    async def create_public_share(self, chat_id: str, owner_id: str, expires_in_days: int = 7) -> str:
+        """Create public share link"""
+        share_id = str(uuid.uuid4())
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days) if expires_in_days else None
+        
+        share_data = {
+            "id": share_id,
+            "chat_id": chat_id,
+            "owner_id": owner_id,
+            "share_type": "public",
+            "share_url": f"/public/{share_id}",
+            "created_at": datetime.now(),
+            "expires_at": expires_at,
+            "is_active": True,
+            "allow_comments": False
+        }
+        
+        db = self.get_db()
+        if db:
+            db.collection("public_shares").document(share_id).set(share_data)
+        return share_id
+    
+    async def get_public_shares(self, user_id: str) -> List[dict]:
+        """Get user's public shares"""
+        db = self.get_db()
+        if not db:
+            return []
+        try:
+            shares = db.collection("public_shares").where(filter=firestore.FieldFilter("owner_id", "==", user_id)).stream()
+            return [share.to_dict() for share in shares]
+        except Exception as e:
+            print(f"Error getting public shares: {e}")
+            return []
+    
+    async def add_share_comment(self, share_id: str, user_id: str, comment: str) -> str:
+        """Add comment to shared chat"""
+        comment_id = str(uuid.uuid4())
+        comment_data = {
+            "id": comment_id,
+            "share_id": share_id,
+            "user_id": user_id,
+            "comment": comment,
+            "timestamp": datetime.now()
+        }
+        db = self.get_db()
+        if db:
+            db.collection("share_comments").document(comment_id).set(comment_data)
+        return comment_id
+    async def check_user_exists(self, email: str) -> bool:
+        """Check if user exists in NovaX AI system"""
+        db = self.get_db()
+        if not db:
+            return False
+        try:
+            users = db.collection("users").where(filter=firestore.FieldFilter("email", "==", email)).stream()
+            return any(users)
+        except Exception as e:
+            print(f"Error checking user existence: {e}")
+            return False
+    
+    async def get_workspace_with_members(self, workspace_id: str) -> dict:
+        """Get workspace details with member list"""
+        db = self.get_db()
+        if not db:
+            return {}
+        try:
+            doc = db.collection("workspaces").document(workspace_id).get()
+            if doc.exists:
+                workspace = doc.to_dict()
+                members = await self.get_workspace_members(workspace_id)
+                workspace["member_details"] = members
+                return workspace
+            return {}
+        except Exception as e:
+            print(f"Error getting workspace with members: {e}")
+            return {}
+    async def create_user_profile(self, user_id: str, email: str, display_name: str = "") -> bool:
+        """Create user profile in database"""
+        db = self.get_db()
+        if not db:
+            return False
+        try:
+            user_data = {
+                "user_id": user_id,
+                "email": email,
+                "display_name": display_name,
+                "created_at": datetime.now(),
+                "email_verified": False,
+                "profile_complete": False
+            }
+            db.collection("users").document(user_id).set(user_data)
+            return True
+        except Exception as e:
+            print(f"Error creating user profile: {e}")
+            return False
