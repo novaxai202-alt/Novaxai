@@ -643,5 +643,147 @@ class DatabaseManager:
             db.collection("share_comments").document(comment_id).set(comment_data)
         return comment_id
 
+    # Productivity Tools - Task Management
+    async def save_todo(self, user_id: str, chat_id: str, todo_data: dict) -> str:
+        todo_id = str(uuid.uuid4())
+        todo_doc = {
+            "id": todo_id,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "title": todo_data.get("title", ""),
+            "description": todo_data.get("description", ""),
+            "priority": todo_data.get("priority", "medium"),
+            "status": todo_data.get("status", "pending"),
+            "source": todo_data.get("source", "conversation"),
+            "due_date": todo_data.get("due_date"),
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        
+        db = self.get_db()
+        if db:
+            db.collection("todos").document(todo_id).set(todo_doc)
+        return todo_id
+    
+    async def get_user_todos(self, user_id: str, status: str = "all") -> List[dict]:
+        db = self.get_db()
+        if not db:
+            return []
+        
+        try:
+            query = db.collection("todos").where(filter=firestore.FieldFilter("user_id", "==", user_id))
+            
+            if status != "all":
+                query = query.where(filter=firestore.FieldFilter("status", "==", status))
+            
+            todos = query.stream()
+            todo_list = [todo.to_dict() for todo in todos]
+            todo_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+            return todo_list
+        except Exception as e:
+            print(f"Error getting todos: {e}")
+            return []
+    
+    async def update_todo(self, user_id: str, todo_id: str, updates: dict) -> bool:
+        db = self.get_db()
+        if not db:
+            return False
+        
+        try:
+            todo_ref = db.collection("todos").document(todo_id)
+            todo_doc = todo_ref.get()
+            
+            if todo_doc.exists and todo_doc.to_dict().get("user_id") == user_id:
+                updates["updated_at"] = datetime.now()
+                todo_ref.update(updates)
+                return True
+            return False
+        except Exception as e:
+            print(f"Error updating todo: {e}")
+            return False
+    
+    # Productivity Tools - Calendar Events
+    async def save_calendar_event(self, user_id: str, chat_id: str, event_data: dict) -> str:
+        event_id = str(uuid.uuid4())
+        event_doc = {
+            "id": event_id,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "title": event_data.get("title", ""),
+            "description": event_data.get("description", ""),
+            "start_time": event_data.get("start_time", ""),
+            "end_time": event_data.get("end_time", ""),
+            "duration": event_data.get("duration", "1 hour"),
+            "type": event_data.get("type", "meeting"),
+            "status": event_data.get("status", "suggested"),
+            "attendees": event_data.get("attendees", []),
+            "location": event_data.get("location", ""),
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        
+        db = self.get_db()
+        if db:
+            db.collection("calendar_events").document(event_id).set(event_doc)
+        return event_id
+    
+    async def get_user_calendar_events(self, user_id: str) -> List[dict]:
+        db = self.get_db()
+        if not db:
+            return []
+        
+        try:
+            events = db.collection("calendar_events").where(
+                filter=firestore.FieldFilter("user_id", "==", user_id)
+            ).stream()
+            
+            event_list = [event.to_dict() for event in events]
+            event_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+            return event_list
+        except Exception as e:
+            print(f"Error getting calendar events: {e}")
+            return []
+    
+    # Productivity Tools - Notes
+    async def save_note(self, user_id: str, chat_id: str, note_data: dict) -> str:
+        note_id = str(uuid.uuid4())
+        note_doc = {
+            "id": note_id,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "title": note_data.get("title", ""),
+            "content": note_data.get("content", ""),
+            "key_points": note_data.get("key_points", []),
+            "category": note_data.get("category", "general"),
+            "tags": note_data.get("tags", []),
+            "is_favorite": note_data.get("is_favorite", False),
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        
+        db = self.get_db()
+        if db:
+            db.collection("notes").document(note_id).set(note_doc)
+        return note_id
+    
+    async def get_user_notes(self, user_id: str, category: str = "all") -> List[dict]:
+        db = self.get_db()
+        if not db:
+            return []
+        
+        try:
+            query = db.collection("notes").where(filter=firestore.FieldFilter("user_id", "==", user_id))
+            
+            if category != "all":
+                query = query.where(filter=firestore.FieldFilter("category", "==", category))
+            
+            notes = query.stream()
+            note_list = [note.to_dict() for note in notes]
+            note_list.sort(key=lambda x: x.get('created_at', datetime.min), reverse=True)
+            return note_list
+        except Exception as e:
+            print(f"Error getting notes: {e}")
+            return []
+
 # Global database instance
 database = DatabaseManager()
