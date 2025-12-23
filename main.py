@@ -2520,3 +2520,166 @@ if __name__ == "__main__":
     import uvicorn
     start_cleanup_task()  # Start cache cleanup
     uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.post("/api/workspace/invite")
+async def invite_to_workspace(request: dict):
+    try:
+        token = request.get("token")
+        workspace_id = request.get("workspace_id")
+        email = request.get("email")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        success = await database.add_workspace_member(workspace_id, email)
+        return {"success": success}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workspace/{workspace_id}/messages")
+async def get_workspace_messages(workspace_id: str):
+    try:
+        messages = await database.get_workspace_messages(workspace_id)
+        return {"messages": messages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workspace/{workspace_id}/chat")
+async def workspace_chat(workspace_id: str, request: dict):
+    try:
+        token = request.get("token")
+        message = request.get("message")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        # Generate AI response
+        response = model.generate_content(f"User in workspace: {message}")
+        
+        # Save to workspace
+        message_id = await database.save_workspace_message(workspace_id, user_id, message, response.text)
+        
+        return {
+            "success": True,
+            "message_id": message_id,
+            "response": response.text
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/api/workspace/{workspace_id}/members")
+async def get_workspace_members(workspace_id: str):
+    try:
+        members = await database.get_workspace_members(workspace_id)
+        return {"members": members}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workspace/role/update")
+async def update_member_role(request: dict):
+    try:
+        token = request.get("token")
+        workspace_id = request.get("workspace_id")
+        user_email = request.get("user_email")
+        role = request.get("role")
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        success = await database.update_member_role(workspace_id, user_email, role)
+        return {"success": success}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@app.post("/api/share/public/create")
+async def create_public_share(request: dict):
+    try:
+        token = request.get("token")
+        chat_id = request.get("chat_id")
+        expires_in_days = request.get("expires_in_days", 7)
+        
+        user_id = "demo_user"
+        if firebase_initialized and token:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        share_id = await database.create_public_share(chat_id, user_id, expires_in_days)
+        return {"success": True, "share_id": share_id, "share_url": f"/public/{share_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/share/public/list/{user_token}")
+async def get_public_shares(user_token: str):
+    try:
+        user_id = "demo_user"
+        if firebase_initialized and user_token:
+            try:
+                decoded_token = auth.verify_id_token(user_token)
+                user_id = decoded_token['uid']
+            except Exception:
+                user_id = "demo_user"
+        
+        shares = await database.get_public_shares(user_id)
+        return {"shares": shares}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/share/comment")
+async def add_share_comment(request: dict):
+    try:
+        share_id = request.get("share_id")
+        comment = request.get("comment")
+        user_id = request.get("user_id", "anonymous")
+        
+        comment_id = await database.add_share_comment(share_id, user_id, comment)
+        return {"success": True, "comment_id": comment_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@app.post("/api/user/check")
+async def check_user_exists(request: dict):
+    try:
+        email = request.get("email")
+        if not email:
+            return {"exists": False, "message": "Email required"}
+        
+        exists = await database.check_user_exists(email)
+        return {
+            "exists": exists,
+            "message": "User found in NovaX AI" if exists else "User not found. They need to sign up first."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/workspace/{workspace_id}/details")
+async def get_workspace_details(workspace_id: str):
+    try:
+        workspace = await database.get_workspace_with_members(workspace_id)
+        return {"workspace": workspace}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@app.post("/api/user/create")
+async def create_user_profile(request: dict):
+    try:
+        user_id = request.get("user_id")
+        email = request.get("email")
+        display_name = request.get("display_name", "")
+        
+        success = await database.create_user_profile(user_id, email, display_name)
+        return {"success": success}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
