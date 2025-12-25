@@ -150,7 +150,7 @@ def get_current_datetime_info() -> dict:
 # NovaX AI Enhanced Personality System
 # NovaX Nano - Image Prompt Enhancement Layer
 NOVAX_NANO_PROMPT = """
-You are NovaX Nano, an image-prompt enhancement layer.
+You are an image-prompt enhancement layer.
 Analyze the user's request for image generation.
 Rewrite it into a detailed, high-quality image prompt.
 Add style, lighting, mood, and visual details if missing.
@@ -392,14 +392,17 @@ model = genai.GenerativeModel('gemini-2.5-flash')
 
 # Brand Safety Filter
 def filter_brand_unsafe_content(response_text: str) -> str:
-    """Filter out any mentions of underlying models or providers"""
+    """Filter out any mentions of underlying models or providers and fix HTML entities"""
+    import html
+    
+    # First decode HTML entities
+    filtered_text = html.unescape(response_text)
+    
     forbidden_terms = [
         'google', 'gemini', 'openai', 'gpt', 'chatgpt', 'meta', 'anthropic', 
         'llama', 'claude', 'api key', 'model version', 'training data',
         'language model', 'ai model', 'based on', 'powered by'
     ]
-    
-    filtered_text = response_text
     
     # Remove identity signatures and agent prefixes
     filtered_text = re.sub(r'NovaX AI — from NovaX Technologies\.?\s*', '', filtered_text, flags=re.IGNORECASE)
@@ -1832,11 +1835,9 @@ NovaX AI:"""
                     if chunk.text:
                         chunk_count += 1
                         
-                        # Filter response to ensure brand safety and decode HTML entities
-                        import html
+                        # Filter response to ensure brand safety (HTML entities handled in filter)
                         try:
                             filtered_chunk = filter_brand_unsafe_content(chunk.text)
-                            filtered_chunk = html.unescape(filtered_chunk)
                             
                             # Check length limits before processing
                             if (response_length + len(filtered_chunk) > max_response_length or 
@@ -2538,10 +2539,8 @@ NovaX AI:"""
                 if response.text and not generated_image:
                     await cache_ai_response(full_prompt, response.text)
         
-        # Filter response to ensure brand safety and decode HTML entities
-        import html
+        # Filter response to ensure brand safety (HTML entities handled in filter)
         filtered_response = filter_brand_unsafe_content(response.text)
-        filtered_response = html.unescape(filtered_response)
         
         # Convert all URLs to clickable markdown links
         import re
