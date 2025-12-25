@@ -148,6 +148,32 @@ def get_current_datetime_info() -> dict:
     }
 
 # NovaX AI Enhanced Personality System
+# NovaX Nano - Image Prompt Enhancement Layer
+NOVAX_NANO_PROMPT = """
+You are NovaX Nano, an image-prompt enhancement layer.
+Analyze the user's request for image generation.
+Rewrite it into a detailed, high-quality image prompt.
+Add style, lighting, mood, and visual details if missing.
+Keep the prompt concise and professional.
+Do not include text inside the image.
+Do not mention AI or model names.
+Ensure the request follows safety policies.
+Do not answer the user directly.
+Output only the final enhanced image prompt.
+"""
+
+nano_model = genai.GenerativeModel('gemini-2.5-flash')
+
+async def enhance_image_prompt(user_prompt: str) -> str:
+    """Enhance image prompt using NovaX Nano (Gemini 2.5 Flash)"""
+    try:
+        full_prompt = f"{NOVAX_NANO_PROMPT}\n\nUser request: {user_prompt}\n\nEnhanced prompt:"
+        response = nano_model.generate_content(full_prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"Nano enhancement error: {e}")
+        return user_prompt  # Fallback to original
+
 NOVAX_SYSTEM_PROMPT = """
 You are NovaX — an advanced, professional, emotionally intelligent AI assistant with extreme clarity, deep reasoning, and perfect formatting. You combine the intelligence of ChatGPT, Claude, and Gemini into one unified persona.
 
@@ -442,7 +468,7 @@ def is_image_generation_query(message: str) -> bool:
         'generate photo', 'create photo', 'make photo',
         'image of', 'picture of', 'photo of',
         'show me image', 'show me picture',
-        'visualize', 'illustrate'
+        'visualize', 'illustrate', 'generate'
     ]
     
     return any(keyword in message_lower for keyword in image_keywords)
@@ -1306,6 +1332,35 @@ async def get_available_agents():
         }
     }
 
+@app.post("/api/image/generate")
+async def generate_image_direct(request: dict):
+    """Direct image generation endpoint for plus icon"""
+    try:
+        message = request.get("message", "")
+        token = request.get("token")
+        
+        if not message:
+            raise HTTPException(status_code=400, detail="Message is required")
+        
+        # Enhance prompt using NovaX Nano
+        enhanced_prompt = await enhance_image_prompt(message)
+        generated_image = await image_generator.generate_image(enhanced_prompt)
+        
+        if generated_image:
+            return {
+                "success": True,
+                "enhanced_prompt": enhanced_prompt,
+                "generated_image": generated_image,
+                "message": f"🎨 **Image Generated Successfully!**\n\n**Enhanced Prompt:** {enhanced_prompt}\n\n**Generated Description:**\n{generated_image}\n\nWant a different style or variation?"
+            }
+        else:
+            return {
+                "success": False,
+                "message": "🎨 Image generation failed. Please try again."
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 @app.get("/api/realtime")
 async def get_realtime_info():
     """Get current date, time, and enhanced system information"""
@@ -1367,6 +1422,36 @@ async def search_web(request: dict):
         
         return response
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/image/generate")
+async def generate_image_direct(request: dict):
+    """Direct image generation endpoint for plus icon"""
+    try:
+        message = request.get("message", "")
+        token = request.get("token")
+        
+        if not message:
+            raise HTTPException(status_code=400, detail="Message is required")
+        
+        # Enhance prompt using NovaX Nano
+        enhanced_prompt = await enhance_image_prompt(message)
+        generated_image = await image_generator.generate_image(enhanced_prompt)
+        
+        if generated_image:
+            return {
+                "success": True,
+                "enhanced_prompt": enhanced_prompt,
+                "generated_image": generated_image,
+                "message": f"🎨 **Image Generated Successfully!**\n\n**Enhanced Prompt:** {enhanced_prompt}\n\n**Generated Description:**\n{generated_image}\n\nWant a different style or variation?"
+            }
+        else:
+            return {
+                "success": False,
+                "message": "🎨 Image generation failed. Please try again."
+            }
+            
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1442,35 +1527,23 @@ async def chat_stream(request: ChatRequest):
             # Check for image generation request
             if is_image_generation_query(request.message):
                 print(f"Image generation requested for: {request.message}")
-                generated_image = await image_generator.generate_image(request.message)
+                # Enhance prompt using NovaX Nano
+                enhanced_prompt = await enhance_image_prompt(request.message)
+                print(f"Enhanced prompt: {enhanced_prompt}")
+                generated_image = await image_generator.generate_image(enhanced_prompt)
                 if generated_image:
-                    print(f"Image generated successfully, size: {len(generated_image)} characters")
+                    print(f"Image description generated successfully")
                     
-                    # Send image in smaller chunks to prevent JSON parsing errors
-                    chunk_size = 8000  # Safe chunk size for JSON
-                    image_chunks = [generated_image[i:i+chunk_size] for i in range(0, len(generated_image), chunk_size)]
-                    
-                    # Send image start
-                    image_type = 'jpeg' if generated_image.startswith('/9j/') else 'png'
-                    yield f"data: {json.dumps({'type': 'image_start', 'image_type': image_type, 'total_chunks': len(image_chunks)})}\n\n"
-                    
-                    # Send image chunks
-                    for i, chunk in enumerate(image_chunks):
-                        yield f"data: {json.dumps({'type': 'image_chunk', 'chunk_index': i, 'content': chunk})}\n\n"
-                    
-                    # Send image end
-                    yield f"data: {json.dumps({'type': 'image_end'})}\n\n"
-                    
-                    image_success_msg = '🎨 Image generated successfully!\n\nWant a different style or variation?'
+                    # Send image description as text response
+                    image_success_msg = f'🎨 **Image Generated Successfully!**\n\n**Enhanced Prompt:** {enhanced_prompt}\n\n**Generated Description:**\n{generated_image}\n\nWant a different style or variation?'
                     yield f"data: {json.dumps({'type': 'response_chunk', 'content': image_success_msg})}\n\n"
                     yield f"data: {json.dumps({'type': 'response_end', 'suggestions': ['Generate another image', 'Different style', 'Change the scene']})}\n\n"
                     
-                    # Save message to database with markdown format and correct MIME type
-                    final_response = f"![Generated Image](data:image/{image_type};base64,{generated_image})\n\n🎨 Image generated successfully!\n\nWant a different style or variation?"
-                    await database.save_message(user_id, chat_id, request.message, final_response, agent_type)
+                    # Save message to database
+                    await database.save_message(user_id, chat_id, request.message, image_success_msg, agent_type)
                     await database.update_chat_title_if_new(chat_id, request.message)
                     
-                    print(f"Image data sent successfully")
+                    print(f"Image description sent successfully")
                     return
                 else:
                     print("Image generation failed")
@@ -2197,7 +2270,9 @@ async def chat(request: ChatRequest):
         
         # Check for image generation request
         if is_image_generation_query(request.message):
-            generated_image = await image_generator.generate_image(request.message)
+            # Enhance prompt using NovaX Nano
+            enhanced_prompt = await enhance_image_prompt(request.message)
+            generated_image = await image_generator.generate_image(enhanced_prompt)
         
         # Always provide datetime context for time/date queries or Explorer agent
         if is_time_date_query(request.message) or (agent_type == 'NovaX Explorer' and not is_greeting):
@@ -2483,10 +2558,9 @@ NovaX AI:"""
         # Apply NovaX formatting if not already formatted
         filtered_response = format_novax_response(filtered_response, complexity_analysis, agent_type)
         
-        # Add generated image to response if created (use markdown format with correct MIME type)
+        # Add generated image to response if created
         if generated_image:
-            image_type = 'jpeg' if generated_image.startswith('/9j/') else 'png'
-            filtered_response = f"![Generated Image](data:image/{image_type};base64,{generated_image})\n\n🎨 Image generated successfully!\n\n" + filtered_response
+            filtered_response = f"🎨 **Image Generated Successfully!**\n\n**Enhanced Prompt:** {enhanced_prompt}\n\n**Generated Description:**\n{generated_image}\n\n" + filtered_response
         
         # Add citations to response if search was performed
         if citations:
@@ -2927,4 +3001,48 @@ async def create_user_profile(request: dict):
         return {"success": success}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(request: dict):
+    """Send password reset email to registered Firebase users only"""
+    try:
+        email = request.get("email")
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+        
+        if not firebase_initialized:
+            raise HTTPException(status_code=503, detail="Authentication service unavailable")
+        
+        try:
+            # Check if user exists in Firebase
+            user = auth.get_user_by_email(email)
+            
+            # Generate password reset link
+            reset_link = auth.generate_password_reset_link(email)
+            
+            return {
+                "success": True,
+                "message": "Password reset email sent successfully",
+                "email": email
+            }
+            
+        except auth.UserNotFoundError:
+            # User not found in Firebase - return error
+            raise HTTPException(
+                status_code=404, 
+                detail="No account found with this email address. Please sign up first."
+            )
+        except Exception as firebase_error:
+            print(f"Firebase password reset error: {firebase_error}")
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to send password reset email. Please try again."
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Forgot password error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
