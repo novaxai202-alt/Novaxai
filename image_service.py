@@ -1,52 +1,42 @@
 import os
-import base64
-import requests
+import google.generativeai as genai
 from typing import Optional
 
 class ImageGenerator:
     def __init__(self):
-        pass
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         
-    async def generate_image(self, prompt: str) -> Optional[str]:
-        """Generate image using multiple services"""
+    async def generate_image(self, enhanced_prompt: str) -> Optional[str]:
+        """Generate image using Gemini 2.5 Flash with enhanced prompt"""
         try:
-            print(f"Generating image with prompt: {prompt}")
-            
-            # Clean prompt
-            clean_prompt = prompt.replace("generate image of", "").replace("create image of", "").strip()
-            
-            # Try Pollinations first with very short timeout
-            try:
-                import urllib.parse
-                encoded_prompt = urllib.parse.quote(clean_prompt)
-                url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=512&height=512"
-                
-                response = requests.get(url, timeout=8)
-                
-                if response.status_code == 200:
-                    image_data = base64.b64encode(response.content).decode()
-                    print("Image generated successfully with Pollinations AI")
-                    return image_data
-            except:
-                print("Pollinations timeout, trying fallback...")
-            
-            # Fallback to DummyJSON placeholder
-            try:
-                fallback_url = f"https://dummyjson.com/image/512x512/008080/ffffff?text={clean_prompt[:15]}"
-                response = requests.get(fallback_url, timeout=5)
-                
-                if response.status_code == 200:
-                    image_data = base64.b64encode(response.content).decode()
-                    print("Generated fallback image")
-                    return image_data
-            except:
-                pass
-            
-            print("All image generation services failed")
-            return None
-                
+            response = self.model.generate_content(f"Create a detailed image of: {enhanced_prompt}")
+            return response.text
         except Exception as e:
-            print(f"Image generation error: {e}")
+            print(f"Gemini image generation error: {e}")
             return None
+    
+    async def handle_image_mode(self, message: str, enhance_image_prompt) -> dict:
+        """Handle image generation mode"""
+        try:
+            enhanced_prompt = await enhance_image_prompt(message)
+            generated_image = await self.generate_image(enhanced_prompt)
+            
+            if generated_image:
+                return {
+                    "success": True,
+                    "enhanced_prompt": enhanced_prompt,
+                    "generated_image": generated_image,
+                    "message": f"🎨 **Image Generated Successfully!**\n\n**Enhanced Prompt:** {enhanced_prompt}\n\n**Generated Description:**\n{generated_image}\n\nWant a different style or variation?"
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "🎨 Image generation failed. Please try again."
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"🎨 Image generation error: {str(e)}"
+            }
 
 image_generator = ImageGenerator()
