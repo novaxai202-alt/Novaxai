@@ -77,17 +77,20 @@ class GeminiAPIPool:
                 status.cooldown_until = time.time() + self.cooldown_duration
                 self.logger.warning(f"API key marked as failed: {error_type}")
     
-    async def generate_content_with_retry(self, prompt: str, max_retries: int = 3) -> Optional[str]:
+    async def generate_content_with_retry(self, prompt: str, max_retries: int = 5) -> Optional[str]:
         """Generate content with automatic retry across different API keys"""
         for attempt in range(max_retries):
             api_key = await self.get_available_key()
             
             if not api_key:
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(1)  # Brief wait before retry
+                    # Wait longer between retries when all keys are exhausted
+                    wait_time = min(2 ** attempt, 10)  # Exponential backoff, max 10 seconds
+                    self.logger.info(f"All keys exhausted, waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                    await asyncio.sleep(wait_time)
                     continue
                 else:
-                    raise Exception("All API keys exhausted")
+                    raise Exception("All API keys are currently rate limited. Please try again in a few minutes.")
             
             try:
                 # Configure Gemini with selected key
@@ -103,29 +106,39 @@ class GeminiAPIPool:
                 
                 if "quota" in error_msg or "rate" in error_msg:
                     await self.mark_key_failed(api_key, "rate_limit")
+                    self.logger.warning(f"API key rate limited on attempt {attempt + 1}, trying next key")
                 elif "invalid" in error_msg:
                     await self.mark_key_failed(api_key, "invalid_key")
+                    self.logger.error(f"Invalid API key detected: {api_key[-8:]}")
                 else:
-                    self.logger.error(f"Unexpected error with key: {e}")
+                    self.logger.error(f"Unexpected error with key {api_key[-8:]}: {e}")
                 
                 if attempt == max_retries - 1:
-                    raise e
+                    # On final attempt, provide user-friendly error
+                    if "quota" in error_msg or "rate" in error_msg:
+                        raise Exception("Service is experiencing high demand. Please try again in a moment.")
+                    else:
+                        raise e
                 
-                await asyncio.sleep(0.5)  # Brief delay before retry
+                # Brief delay before trying next key
+                await asyncio.sleep(0.5)
         
         return None
     
-    async def generate_content_stream_with_retry(self, prompt: str, max_retries: int = 3):
-        """Generate streaming content with automatic retry"""
+    async def generate_content_stream_with_retry(self, prompt: str, max_retries: int = 5):
+        """Generate streaming content with automatic retry and better error handling"""
         for attempt in range(max_retries):
             api_key = await self.get_available_key()
             
             if not api_key:
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(1)
+                    # Wait longer between retries when all keys are exhausted
+                    wait_time = min(2 ** attempt, 10)  # Exponential backoff, max 10 seconds
+                    self.logger.info(f"All keys exhausted, waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                    await asyncio.sleep(wait_time)
                     continue
                 else:
-                    raise Exception("All API keys exhausted")
+                    raise Exception("All API keys are currently rate limited. Please try again in a few minutes.")
             
             try:
                 genai.configure(api_key=api_key)
@@ -139,12 +152,21 @@ class GeminiAPIPool:
                 
                 if "quota" in error_msg or "rate" in error_msg:
                     await self.mark_key_failed(api_key, "rate_limit")
+                    self.logger.warning(f"API key rate limited on attempt {attempt + 1}, trying next key")
                 elif "invalid" in error_msg:
                     await self.mark_key_failed(api_key, "invalid_key")
+                    self.logger.error(f"Invalid API key detected: {api_key[-8:]}")
+                else:
+                    self.logger.error(f"Unexpected error with key {api_key[-8:]}: {e}")
                 
                 if attempt == max_retries - 1:
-                    raise e
+                    # On final attempt, provide user-friendly error
+                    if "quota" in error_msg or "rate" in error_msg:
+                        raise Exception("Service is experiencing high demand. Please try again in a moment.")
+                    else:
+                        raise e
                 
+                # Brief delay before trying next key
                 await asyncio.sleep(0.5)
         
         return None
