@@ -1901,22 +1901,43 @@ NovaX AI:"""
             yield f"data: {json.dumps({'type': 'response_end', 'suggestions': suggestions})}\n\n"
             
         except Exception as e:
-            error_message = "I encountered an issue processing your request."
-            
-            # Provide specific error messages based on error type
             error_str = str(e).lower()
-            if "timeout" in error_str or "timed out" in error_str:
-                error_message = "The response took longer than expected. This often happens with very detailed requests. Try breaking your question into smaller parts."
-            elif "json" in error_str or "parse" in error_str:
-                error_message = "There was a formatting issue with the response. Please try rephrasing your request or asking for a shorter response."
-            elif "memory" in error_str or "limit" in error_str:
-                error_message = "Your request generated a very large response. Try asking for specific sections or a more focused question."
-            elif "rate" in error_str or "quota" in error_str:
-                error_message = "The AI service is currently busy. Please wait a moment and try again."
-            elif "connection" in error_str or "network" in error_str:
-                error_message = "Network connection issue. Please check your internet connection and try again."
-            elif "invalid" in error_str:
-                error_message = "There was an issue with your request format. Please try rephrasing your question."
+            
+            # For rate limiting errors, try to handle silently by switching keys
+            if "rate" in error_str or "quota" in error_str:
+                print(f"Rate limiting detected, attempting automatic recovery: {str(e)}")
+                # Don't send error to frontend for rate limiting - let pool handle it
+                try:
+                    # Try one more time with a different approach
+                    if use_pool:
+                        pool = get_gemini_pool()
+                        # Force a key refresh and retry
+                        await asyncio.sleep(1)  # Brief pause
+                        response_text = await pool.generate_content_with_retry(full_prompt, max_retries=1)
+                        if response_text:
+                            yield f"data: {json.dumps({'type': 'response_start'})}\n\n"
+                            yield f"data: {json.dumps({'type': 'response_chunk', 'content': response_text})}\n\n"
+                            yield f"data: {json.dumps({'type': 'response_end', 'suggestions': suggestions})}\n\n"
+                            return
+                except Exception as retry_error:
+                    print(f"Retry after rate limit also failed: {retry_error}")
+                
+                # If all retries fail, show a user-friendly message
+                error_message = "I'm experiencing high demand right now. Please try again in a moment."
+            else:
+                # Handle other types of errors with specific messages
+                if "timeout" in error_str or "timed out" in error_str:
+                    error_message = "The response took longer than expected. Please try a shorter question."
+                elif "json" in error_str or "parse" in error_str:
+                    error_message = "There was a formatting issue. Please try rephrasing your request."
+                elif "memory" in error_str or "limit" in error_str:
+                    error_message = "Your request was too complex. Try asking for specific sections."
+                elif "connection" in error_str or "network" in error_str:
+                    error_message = "Network connection issue. Please check your internet and try again."
+                elif "invalid" in error_str:
+                    error_message = "There was an issue with your request format. Please try rephrasing."
+                else:
+                    error_message = "I encountered an issue processing your request. Please try again."
             
             print(f"Stream error: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'message': error_message})}\n\n"
